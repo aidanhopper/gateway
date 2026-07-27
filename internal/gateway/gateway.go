@@ -17,6 +17,7 @@ import (
 type Gateway struct {
 	httpRoutes map[string]*HTTPRoute
 	tcpRoutes  map[string]*TCPRoute
+	udpRoutes  map[string]*UDPRoute
 	listeners  map[string]*Listener
 }
 
@@ -24,6 +25,7 @@ func New() *Gateway {
 	return &Gateway{
 		httpRoutes: make(map[string]*HTTPRoute),
 		tcpRoutes:  make(map[string]*TCPRoute),
+		udpRoutes:  make(map[string]*UDPRoute),
 		listeners:  make(map[string]*Listener),
 	}
 }
@@ -40,10 +42,30 @@ func (gw *Gateway) AddTCPRoute(route TCPRoute) error {
 
 func (gw *Gateway) RemoveTCPRoute(name string) error {
 	if _, ok := gw.tcpRoutes[name]; !ok {
-		return fmt.Errorf("route %s does not exist within the gateway", name)
+		return fmt.Errorf("tcp route %s does not exist within the gateway", name)
 	}
 
 	delete(gw.tcpRoutes, name)
+
+	return nil
+}
+
+func (gw *Gateway) AddUDPRoute(route UDPRoute) error {
+	if _, ok := gw.udpRoutes[route.Name]; ok {
+		return fmt.Errorf("udp route %s is already present within the gateway", route.Name)
+	}
+
+	gw.udpRoutes[route.Name] = &route
+
+	return nil
+}
+
+func (gw *Gateway) RemoveUDPRoute(name string) error {
+	if _, ok := gw.udpRoutes[name]; !ok {
+		return fmt.Errorf("udp route %s does not exist within the gateway", name)
+	}
+
+	delete(gw.udpRoutes, name)
 
 	return nil
 }
@@ -60,7 +82,7 @@ func (gw *Gateway) AddHTTPRoute(route HTTPRoute) error {
 
 func (gw *Gateway) RemoveHTTPRoute(name string) error {
 	if _, ok := gw.httpRoutes[name]; !ok {
-		return fmt.Errorf("http %s does not exist within the gateway", name)
+		return fmt.Errorf("http route %s does not exist within the gateway", name)
 	}
 
 	delete(gw.httpRoutes, name)
@@ -121,15 +143,12 @@ func (gw *Gateway) handleConnection(ctx context.Context, lnName string, conn net
 
 	switch protocol {
 	case ProtoTCP:
-		tcpConn := newTCPConn(conn)
-
-		if tcpConn != nil {
+		if tcpConn := newTCPConn(conn); tcpConn != nil {
 			gw.handleTCPConnection(ctx, lnName, tcpConn)
 		} else {
 			conn.Close()
 		}
 	case ProtoUDP:
-		defer conn.Close()
 		gw.handleUDPConnection(ctx, conn)
 	}
 }
@@ -146,7 +165,7 @@ func (gw *Gateway) matchTCP(lnName string, conn *tcpConn) *TCPRoute {
 	})
 
 	for _, route := range routes {
-		if route.Listener == lnName && route.Rule.Match(conn) {
+		if route.Listener == lnName && route.Rule.Match(newTCPMetadata(conn)) {
 			return route
 		}
 	}
@@ -177,18 +196,20 @@ func (gw *Gateway) matchHTTP(r *http.Request, lnName string) *HTTPRoute {
 func (gw *Gateway) handleTCPConnection(ctx context.Context, lnName string, conn *tcpConn) {
 	if route := gw.matchTCP(lnName, conn); route != nil {
 		defer conn.Close()
-		route.Handler.Handle(conn)
+		route.Handler.ServeTCP(conn, newTCPMetadata(conn))
 	} else if conn.IsTLS() {
 		gw.handleTLSConnection(ctx, lnName, conn)
 	} else if conn.IsHTTP() {
 		gw.handleHTTPConnection(ctx, lnName, conn)
+	} else {
+		conn.Close()
 	}
 }
 
 func (gw *Gateway) handleTLSConnection(ctx context.Context, lnName string, conn *tcpConn) {
 	listener := gw.listeners[lnName]
 
-	tlsInfo, err := conn.GetTLSInfo()
+	tlsInfo, err := conn.getTLSInfo()
 	if err != nil {
 		log.Println(err)
 		return
@@ -239,4 +260,6 @@ func (gw *Gateway) handleHTTPConnection(ctx context.Context, lnName string, conn
 	}
 }
 
-func (gw *Gateway) handleUDPConnection(ctx context.Context, conn net.Conn) {}
+func (gw *Gateway) handleUDPConnection(ctx context.Context, conn net.Conn) {
+	conn.Close()
+}

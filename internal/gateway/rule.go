@@ -3,6 +3,7 @@ package gateway
 import (
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -10,7 +11,8 @@ type Rule[T any] interface {
 	Match(T) bool
 }
 
-type TCPRule = Rule[TCPConn]
+type UDPRule = Rule[UDPMetadata]
+type TCPRule = Rule[TCPMetadata]
 type HTTPRule = Rule[*http.Request]
 
 type RuleFunc[T any] func(T) bool
@@ -55,6 +57,14 @@ func Any[T any]() Rule[T] {
 
 func AnyHTTP() HTTPRule {
 	return Any[*http.Request]()
+}
+
+func AndHTTP() HTTPRule {
+	return And[*http.Request]()
+}
+
+func OrHTTP() HTTPRule {
+	return Or[*http.Request]()
 }
 
 func Host(host string) HTTPRule {
@@ -131,5 +141,90 @@ func RemoteIP(ip string) HTTPRule {
 		}
 
 		return host == ip
+	})
+}
+
+func IsMinecraft() TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		return m.Minecraft != nil
+	})
+}
+
+func MinecraftHost(hosts ...string) TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		if m.Minecraft == nil {
+			return false
+		}
+
+		return slices.Contains(hosts, m.Minecraft.RequestedHost)
+	})
+}
+
+func MinecraftVersion(versions ...int) TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		if m.Minecraft == nil {
+			return false
+		}
+
+		return slices.Contains(versions, m.Minecraft.ProtocolVersion)
+	})
+}
+
+func MinecraftLogin() TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		return m.Minecraft != nil &&
+			m.Minecraft.IsLoginStart
+	})
+}
+
+func MinecraftStatus() TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		return m.Minecraft != nil &&
+			m.Minecraft.ProtocolState == 1
+	})
+}
+
+func MinecraftLoginState() TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		return m.Minecraft != nil &&
+			m.Minecraft.ProtocolState == 2
+	})
+}
+
+func MinecraftPlayer(players ...string) TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		if m.Minecraft == nil {
+			return false
+		}
+
+		if !m.Minecraft.IsLoginStart {
+			return true
+		}
+
+		return slices.Contains(players, m.Minecraft.Username)
+	})
+}
+
+func MinecraftNotPlayer(players ...string) TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		if m.Minecraft == nil {
+			return false
+		}
+
+		if !m.Minecraft.IsLoginStart {
+			return true
+		}
+
+		return !slices.Contains(players, m.Minecraft.Username)
+	})
+}
+
+func MinecraftRequestedPort(ports ...uint16) TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		if m.Minecraft == nil {
+			return false
+		}
+
+		return slices.Contains(ports, m.Minecraft.RequestedPort)
 	})
 }

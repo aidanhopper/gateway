@@ -4,8 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"net"
-	"time"
 )
+
+type TCPMetadata struct {
+	Minecraft *MinecraftInfo
+	TCP       *TCPInfo
+	TLS       *TLSInfo
+}
 
 type TCPInfo struct {
 	LocalAddr  *net.TCPAddr
@@ -39,13 +44,10 @@ func (c *tcpConn) Read(p []byte) (int, error) {
 }
 
 func (c *tcpConn) Peek(n int) ([]byte, error) {
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
-	defer c.SetReadDeadline(time.Time{})
-
 	return c.reader.Peek(n)
 }
 
-func (c *tcpConn) GetTCPInfo() (*TCPInfo, error) {
+func (c *tcpConn) getTCPInfo() (*TCPInfo, error) {
 	if c.tcpChecked {
 		return c.tcpInfo, nil
 	}
@@ -54,12 +56,12 @@ func (c *tcpConn) GetTCPInfo() (*TCPInfo, error) {
 
 	localAddr, ok := c.LocalAddr().(*net.TCPAddr)
 	if !ok {
-		return nil, fmt.Errorf("local address is not a TCP address")
+		return nil, fmt.Errorf("local address is not a tcp address")
 	}
 
 	remoteAddr, ok := c.RemoteAddr().(*net.TCPAddr)
 	if !ok {
-		return nil, fmt.Errorf("remote address is not a TCP address")
+		return nil, fmt.Errorf("remote address is not a tcp address")
 	}
 
 	c.tcpInfo = &TCPInfo{
@@ -71,11 +73,23 @@ func (c *tcpConn) GetTCPInfo() (*TCPInfo, error) {
 }
 
 type TCPHandler interface {
-	Handle(conn net.Conn) error
+	ServeTCP(conn net.Conn, metadata TCPMetadata)
 }
 
-type TCPConn interface {
-	GetMinecraftInfo() (*MinecraftInfo, error)
-	GetTCPInfo() (*TCPInfo, error)
-	GetTLSInfo() (*TLSInfo, error)
+type TCPHandlerFunc func(conn net.Conn, metadata TCPMetadata)
+
+func (f TCPHandlerFunc) ServeTCP(conn net.Conn, metadata TCPMetadata) {
+	f(conn, metadata)
+}
+
+func newTCPMetadata(conn *tcpConn) TCPMetadata {
+	minecraftInfo, _ := conn.getMinecraftInfo()
+	tlsInfo, _ := conn.getTLSInfo()
+	tcpInfo, _ := conn.getTCPInfo()
+
+	return TCPMetadata{
+		Minecraft: minecraftInfo,
+		TLS:       tlsInfo,
+		TCP:       tcpInfo,
+	}
 }

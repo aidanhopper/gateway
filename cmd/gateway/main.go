@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log"
-	"net/http"
+	"net"
+	"net/http/httputil"
+	"net/url"
 
 	"github.com/aidanhopper/gateway/internal/gateway"
 )
@@ -34,12 +37,48 @@ func main() {
 		TLSHandler: BasicTLS(),
 	})
 
+	gw.AddListener(gateway.Listener{
+		Name:     "minecraft",
+		Address:  ":25565",
+		Protocol: gateway.ProtoTCP,
+	})
+
+	url, _ := url.Parse("http://docker-server:8096")
+
 	gw.AddHTTPRoute(gateway.HTTPRoute{
 		Name:     "hello",
 		Listener: "web",
-		Rule:     gateway.Path("/abc"),
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Write([]byte("hello world"))
+		Rule:     gateway.Secure(),
+		Handler:  httputil.NewSingleHostReverseProxy(url),
+	})
+
+	gw.AddTCPRoute(gateway.TCPRoute{
+		Name:     "echo back server",
+		Listener: "minecraft",
+		Rule:     gateway.Any[gateway.TCPMetadata](),
+		Handler: gateway.TCPHandlerFunc(func(conn net.Conn, metadata gateway.TCPMetadata) {
+			str := fmt.Sprintf("Hello %s\n", metadata.TCP)
+			for range 1000 {
+				conn.Write([]byte(str))
+			}
+		}),
+	})
+
+	gw.AddTCPRoute(gateway.TCPRoute{
+		Name:     "vanilla server",
+		Listener: "minecraft",
+		Rule:     gateway.And(gateway.IsMinecraft(), gateway.MinecraftPlayer("didscare")),
+		Priority: 1,
+		Handler: gateway.TCPHandlerFunc(func(conn net.Conn, metadata gateway.TCPMetadata) {
+			defer conn.Close()
+			upstream, err := net.Dial("tcp", "docker-server:25565")
+			if err != nil {
+				return
+			}
+			defer upstream.Close()
+
+			go io.Copy(upstream, conn)
+			io.Copy(conn, upstream)
 		}),
 	})
 

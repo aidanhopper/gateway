@@ -20,7 +20,7 @@ func isClientHello(conn *tcpConn) (bool, error) {
 	return bytes[0] == 0x16, nil
 }
 
-func (c *tcpConn) GetTLSInfo() (*TLSInfo, error) {
+func (c *tcpConn) getTLSInfo() (*TLSInfo, error) {
 	if c.tlsChecked {
 		return c.tlsInfo, nil
 	}
@@ -81,7 +81,7 @@ func (c *tcpConn) GetTLSInfo() (*TLSInfo, error) {
 }
 
 func (c *tcpConn) IsTLS() bool {
-	info, _ := c.GetTLSInfo()
+	info, _ := c.getTLSInfo()
 	return info != nil
 }
 

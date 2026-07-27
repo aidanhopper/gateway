@@ -17,3 +17,11 @@ type HTTPRoute struct {
 	Rule     HTTPRule
 	Priority int
 }
+
+type UDPRoute struct {
+	Name     string
+	Listener string
+	Handler  UDPHandler
+	Rule     UDPRule
+	Priority int
+}
