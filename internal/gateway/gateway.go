@@ -10,9 +10,35 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"time"
 )
 
-// TODO: Change gateway to compiile routes based on priority when adding a removing.
+// LogEvent is emitted for every proxied request/connection through the Gateway.
+type LogEvent struct {
+	Timestamp  time.Time `json:"timestamp"`
+	Protocol   string    `json:"protocol"` // "http", "tcp", "udp"
+	Route      string    `json:"route"`
+	Listener   string    `json:"listener"`
+	Method     string    `json:"method,omitempty"`
+	Path       string    `json:"path,omitempty"`
+	Status     int       `json:"status,omitempty"`
+	DurationMs int64     `json:"duration_ms"`
+	RemoteIP   string    `json:"remote_ip"`
+	Error      string    `json:"error,omitempty"`
+}
+
+// statusResponseWriter captures the status code written by a downstream handler.
+type statusResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *statusResponseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+// TODO: Change gateway to compile routes based on priority when adding/removing.
 //
 //	Would be better than sorting the routes by priority for every request.
 type Gateway struct {
@@ -30,6 +56,19 @@ type Gateway struct {
 	running bool
 
 	ctx context.Context
+
+	// OnLogEvent is called after each proxied request/connection. Thread-safe.
+	OnLogEvent func(event LogEvent)
+}
+
+// emitLog fires OnLogEvent if set, without holding any locks.
+func (gw *Gateway) emitLog(ev LogEvent) {
+	gw.mu.RLock()
+	fn := gw.OnLogEvent
+	gw.mu.RUnlock()
+	if fn != nil {
+		fn(ev)
+	}
 }
 
 func New() *Gateway {
@@ -145,7 +184,12 @@ func (gw *Gateway) AddListener(listener Listener) error {
 	gw.mu.Unlock()
 
 	if running {
-		return gw.startListener(listener.Name)
+		if err := gw.startListener(listener.Name); err != nil {
+			gw.mu.Lock()
+			delete(gw.listeners, listener.Name)
+			gw.mu.Unlock()
+			return err
+		}
 	}
 
 	return nil
@@ -334,7 +378,17 @@ func (gw *Gateway) handleTCPConnection(ctx context.Context, lnName string, conn 
 		defer state.unregisterConn(route.Name, conn)
 		defer conn.Close()
 
+		start := time.Now()
+		remoteAddr := conn.RemoteAddr().String()
 		route.Handler.ServeTCP(conn, newTCPMetadata(conn))
+		gw.emitLog(LogEvent{
+			Timestamp:  start,
+			Protocol:   "tcp",
+			Route:      route.Name,
+			Listener:   lnName,
+			DurationMs: time.Since(start).Milliseconds(),
+			RemoteIP:   remoteAddr,
+		})
 	} else if conn.IsTLS() {
 		gw.handleTLSConnection(ctx, lnName, conn)
 	} else if conn.IsHTTP() {
@@ -400,7 +454,20 @@ func (gw *Gateway) handleHTTPConnection(ctx context.Context, lnName string, conn
 			state.registerConn(route.Name, conn)
 			defer state.unregisterConn(route.Name, conn)
 
-			route.Handler.ServeHTTP(w, r)
+			start := time.Now()
+			rw := &statusResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+			route.Handler.ServeHTTP(rw, r)
+			gw.emitLog(LogEvent{
+				Timestamp:  start,
+				Protocol:   "http",
+				Route:      route.Name,
+				Listener:   lnName,
+				Method:     r.Method,
+				Path:       r.URL.Path,
+				Status:     rw.statusCode,
+				DurationMs: time.Since(start).Milliseconds(),
+				RemoteIP:   r.RemoteAddr,
+			})
 		}),
 	}
 

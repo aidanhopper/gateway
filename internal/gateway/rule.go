@@ -150,6 +150,26 @@ func NotTLS() TCPRule {
 	})
 }
 
+func SNI(hosts ...string) TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		if m.TLS == nil {
+			return false
+		}
+		for _, host := range hosts {
+			if m.TLS.SNI == host {
+				return true
+			}
+			if strings.HasPrefix(host, "*.") {
+				suffix := host[1:] // e.g. ".example.com"
+				if strings.HasSuffix(m.TLS.SNI, suffix) && !strings.Contains(m.TLS.SNI[:len(m.TLS.SNI)-len(suffix)], ".") {
+					return true
+				}
+			}
+		}
+		return false
+	})
+}
+
 func NotHTTP() TCPRule {
 	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
 		return !m.IsHTTP

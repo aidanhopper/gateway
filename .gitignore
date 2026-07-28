@@ -1,2 +1,4 @@
 gateway
 cert
+bin
+*.env
