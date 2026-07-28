@@ -1,9 +1,13 @@
 package handlers
 
 import (
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -140,12 +144,24 @@ func TestHTTPMiddlewares(t *testing.T) {
 
 	t.Run("HTTPStripPrefix", func(t *testing.T) {
 		sp := &HTTPStripPrefix{Prefix: "/api/v1", Next: finalHandler}
-		req := httptest.NewRequest("GET", "/api/v1/users", nil)
-		rec := httptest.NewRecorder()
-		sp.ServeHTTP(rec, req)
 
-		if rec.Body.String() != "PATH:/users" {
-			t.Errorf("got %q, want 'PATH:/users'", rec.Body.String())
+		// Exact match on prefix without trailing slash -> Traefik 301 redirect to /api/v1/
+		req1 := httptest.NewRequest("GET", "/api/v1", nil)
+		rec1 := httptest.NewRecorder()
+		sp.ServeHTTP(rec1, req1)
+		if rec1.Code != http.StatusMovedPermanently {
+			t.Errorf("expected 301 Moved Permanently for /api/v1, got %d", rec1.Code)
+		}
+		if rec1.Header().Get("Location") != "/api/v1/" {
+			t.Errorf("expected Location /api/v1/, got %q", rec1.Header().Get("Location"))
+		}
+
+		// Match with subpath -> strips prefix /api/v1
+		req2 := httptest.NewRequest("GET", "/api/v1/users", nil)
+		rec2 := httptest.NewRecorder()
+		sp.ServeHTTP(rec2, req2)
+		if rec2.Body.String() != "PATH:/users" {
+			t.Errorf("got %q, want 'PATH:/users'", rec2.Body.String())
 		}
 	})
 
@@ -183,4 +199,114 @@ func TestHTTPMiddlewares(t *testing.T) {
 			t.Errorf("expected 200 OK, got %d", rec.Code)
 		}
 	})
+
+	t.Run("HTTPRedirectSuite", func(t *testing.T) {
+		// 1. Root redirect preserves path and query string
+		redirRoot := &HTTPRedirect{URL: "https://what.localhost/"}
+		req := httptest.NewRequest("GET", "/install.sh?v=1", nil)
+		rec := httptest.NewRecorder()
+		redirRoot.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMovedPermanently {
+			t.Errorf("expected 301, got %d", rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "https://what.localhost/install.sh?v=1" {
+			t.Errorf("expected Location https://what.localhost/install.sh?v=1, got %q", loc)
+		}
+
+		// 2. Explicit full file URL redirect
+		redirFile := &HTTPRedirect{URL: "https://what.localhost/install.sh"}
+		req = httptest.NewRequest("GET", "/install.sh", nil)
+		rec = httptest.NewRecorder()
+		redirFile.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMovedPermanently {
+			t.Errorf("expected 301, got %d", rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "https://what.localhost/install.sh" {
+			t.Errorf("expected Location https://what.localhost/install.sh, got %q", loc)
+		}
+
+		// 3. Empty target URL dynamically builds from Host header
+		redirEmpty := &HTTPRedirect{URL: ""}
+		req = httptest.NewRequest("GET", "/script.sh?foo=bar", nil)
+		req.Host = "app.localhost"
+		rec = httptest.NewRecorder()
+		redirEmpty.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMovedPermanently {
+			t.Errorf("expected 301, got %d", rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); loc != "https://app.localhost/script.sh?foo=bar" {
+			t.Errorf("expected Location https://app.localhost/script.sh?foo=bar, got %q", loc)
+		}
+	})
+}
+
+func TestHTTPStatic(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "static-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_ = os.WriteFile(filepath.Join(tmpDir, "index.html"), []byte("<h1>HOME</h1>"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "app.js"), []byte("console.log('test')"), 0644)
+
+	staticHandler := &HTTPStatic{Dir: tmpDir, SPA: false}
+
+	// 1. Direct file
+	req := httptest.NewRequest("GET", "/app.js", nil)
+	rec := httptest.NewRecorder()
+	staticHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "console.log") {
+		t.Errorf("expected 200 with app.js content, got code %d body %q", rec.Code, rec.Body.String())
+	}
+
+	// 2. Index file fallback for directory
+	req = httptest.NewRequest("GET", "/", nil)
+	rec = httptest.NewRecorder()
+	staticHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "HOME") {
+		t.Errorf("expected 200 with index.html content, got code %d body %q", rec.Code, rec.Body.String())
+	}
+
+	// 3. Non-existent file without SPA -> 404
+	req = httptest.NewRequest("GET", "/dashboard/settings", nil)
+	rec = httptest.NewRecorder()
+	staticHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404 Not Found for non-SPA missing path, got %d", rec.Code)
+	}
+
+	// 4. Non-existent file WITH SPA -> index.html fallback
+	spaHandler := &HTTPStatic{Dir: tmpDir, SPA: true}
+	req = httptest.NewRequest("GET", "/dashboard/settings", nil)
+	rec = httptest.NewRecorder()
+	spaHandler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "HOME") {
+		t.Errorf("expected SPA fallback to index.html 200 OK, got code %d body %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHTTPStaticRealServer(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "static-real-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	_ = os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module mytest\n\ngo 1.25"), 0644)
+
+	staticHandler := &HTTPStatic{Dir: tmpDir, SPA: true}
+	ts := httptest.NewServer(staticHandler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/go.mod")
+	if err != nil {
+		t.Fatalf("http.Get failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "module mytest\n\ngo 1.25" {
+		t.Errorf("got %q, want 'module mytest\\n\\ngo 1.25'", string(body))
+	}
 }

@@ -6,8 +6,6 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/aidanhopper/gateway/internal/gateway"
 )
 
 func TestLogBroadcasterAndStream(t *testing.T) {
@@ -19,7 +17,7 @@ func TestLogBroadcasterAndStream(t *testing.T) {
 	ch2 := broadcaster.Subscribe("target-route")
 	defer broadcaster.Unsubscribe(ch2)
 
-	event1 := gateway.LogEvent{
+	event1 := LogEvent{
 		Timestamp:  time.Now(),
 		Protocol:   "http",
 		Route:      "other-route",
@@ -48,15 +46,19 @@ func TestLogBroadcasterAndStream(t *testing.T) {
 		// Expected filtered out
 	}
 
-	event2 := gateway.LogEvent{
+	event2 := LogEvent{
 		Timestamp:  time.Now(),
-		Protocol:   "http",
+		Protocol:   "minecraft",
 		Route:      "target-route",
 		Method:     "POST",
 		Path:       "/data",
 		Status:     201,
 		DurationMs: 25,
 		RemoteIP:   "127.0.0.1",
+		MinecraftInfo: &MinecraftInfoSpec{
+			RequestedHost: "mc.server.com",
+			Username:      "Player1",
+		},
 	}
 
 	broadcaster.Broadcast(event2)
@@ -65,6 +67,9 @@ func TestLogBroadcasterAndStream(t *testing.T) {
 	case ev := <-ch2:
 		if ev.Route != "target-route" {
 			t.Errorf("unexpected route: %s", ev.Route)
+		}
+		if ev.MinecraftInfo == nil || ev.MinecraftInfo.Username != "Player1" {
+			t.Errorf("expected MinecraftInfo username Player1, got %+v", ev.MinecraftInfo)
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Error("timeout waiting for subscriber 2 event")

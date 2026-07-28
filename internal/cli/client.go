@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/aidanhopper/gateway/internal/api"
-	"github.com/aidanhopper/gateway/internal/gateway"
 )
 
 // Client encapsulates interactions with the Gateway REST API and provides offline SQLite fallback.
@@ -342,7 +341,7 @@ func (c *Client) RevokeToken(ctx context.Context, id string) error {
 }
 
 // StreamLogs connects to the daemon SSE log endpoint and streams LogEvents to handler until ctx is cancelled.
-func (c *Client) StreamLogs(ctx context.Context, routeFilter string, handler func(event gateway.LogEvent)) error {
+func (c *Client) StreamLogs(ctx context.Context, routeFilter string, handler func(event api.LogEvent)) error {
 	urlStr := fmt.Sprintf("%s/api/v1/logs/stream?route=%s", c.BaseURL, routeFilter)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
@@ -388,7 +387,7 @@ func (c *Client) StreamLogs(ctx context.Context, routeFilter string, handler fun
 				l = strings.TrimSpace(l)
 				if strings.HasPrefix(l, "data: ") {
 					dataJSON := strings.TrimPrefix(l, "data: ")
-					var ev gateway.LogEvent
+					var ev api.LogEvent
 					if jsonErr := json.Unmarshal([]byte(dataJSON), &ev); jsonErr == nil && !ev.Timestamp.IsZero() {
 						handler(ev)
 					}

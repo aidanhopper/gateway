@@ -87,7 +87,11 @@ func Path(path string) HTTPRule {
 
 func PathPrefix(prefix string) HTTPRule {
 	return RuleFunc[*http.Request](func(r *http.Request) bool {
-		return strings.HasPrefix(r.URL.Path, prefix)
+		if prefix == "/" || prefix == "" {
+			return true
+		}
+		cleanPrefix := strings.TrimSuffix(prefix, "/")
+		return r.URL.Path == cleanPrefix || strings.HasPrefix(r.URL.Path, cleanPrefix+"/")
 	})
 }
 

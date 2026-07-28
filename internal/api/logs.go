@@ -5,35 +5,33 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-
-	"github.com/aidanhopper/gateway/internal/gateway"
 )
 
 // LogBroadcaster manages pub-sub subscriptions for real-time log streaming.
 type LogBroadcaster struct {
 	mu          sync.RWMutex
-	subscribers map[chan gateway.LogEvent]string // subscriber channel -> optional route filter
+	subscribers map[chan LogEvent]string // subscriber channel -> optional route filter
 }
 
 // NewLogBroadcaster creates a new LogBroadcaster.
 func NewLogBroadcaster() *LogBroadcaster {
 	return &LogBroadcaster{
-		subscribers: make(map[chan gateway.LogEvent]string),
+		subscribers: make(map[chan LogEvent]string),
 	}
 }
 
 // Subscribe registers a new subscriber channel with an optional route filter.
-func (b *LogBroadcaster) Subscribe(routeFilter string) chan gateway.LogEvent {
+func (b *LogBroadcaster) Subscribe(routeFilter string) chan LogEvent {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	ch := make(chan gateway.LogEvent, 100)
+	ch := make(chan LogEvent, 100)
 	b.subscribers[ch] = routeFilter
 	return ch
 }
 
 // Unsubscribe removes a subscriber channel.
-func (b *LogBroadcaster) Unsubscribe(ch chan gateway.LogEvent) {
+func (b *LogBroadcaster) Unsubscribe(ch chan LogEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -44,7 +42,7 @@ func (b *LogBroadcaster) Unsubscribe(ch chan gateway.LogEvent) {
 }
 
 // Broadcast sends a log event to all matching subscribers.
-func (b *LogBroadcaster) Broadcast(event gateway.LogEvent) {
+func (b *LogBroadcaster) Broadcast(event LogEvent) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 

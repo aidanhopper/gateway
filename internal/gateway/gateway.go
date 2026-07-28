@@ -15,16 +15,17 @@ import (
 
 // LogEvent is emitted for every proxied request/connection through the Gateway.
 type LogEvent struct {
-	Timestamp  time.Time `json:"timestamp"`
-	Protocol   string    `json:"protocol"` // "http", "tcp", "udp"
-	Route      string    `json:"route"`
-	Listener   string    `json:"listener"`
-	Method     string    `json:"method,omitempty"`
-	Path       string    `json:"path,omitempty"`
-	Status     int       `json:"status,omitempty"`
-	DurationMs int64     `json:"duration_ms"`
-	RemoteIP   string    `json:"remote_ip"`
-	Error      string    `json:"error,omitempty"`
+	Timestamp     time.Time      `json:"timestamp"`
+	Protocol      string         `json:"protocol"` // "http", "tcp", "udp", "minecraft"
+	Route         string         `json:"route"`
+	Listener      string         `json:"listener"`
+	Method        string         `json:"method,omitempty"`
+	Path          string         `json:"path,omitempty"`
+	Status        int            `json:"status,omitempty"`
+	DurationMs    int64          `json:"duration_ms"`
+	RemoteIP      string         `json:"remote_ip"`
+	Error         string         `json:"error,omitempty"`
+	MinecraftInfo *MinecraftInfo `json:"minecraft_info,omitempty"`
 }
 
 // statusResponseWriter captures the status code written by a downstream handler.
@@ -380,15 +381,23 @@ func (gw *Gateway) handleTCPConnection(ctx context.Context, lnName string, conn 
 
 		start := time.Now()
 		remoteAddr := conn.RemoteAddr().String()
-		route.Handler.ServeTCP(conn, newTCPMetadata(conn))
+		meta := newTCPMetadata(conn)
+
+		proto := "tcp"
+		if meta.Minecraft != nil {
+			proto = "minecraft"
+		}
+
 		gw.emitLog(LogEvent{
-			Timestamp:  start,
-			Protocol:   "tcp",
-			Route:      route.Name,
-			Listener:   lnName,
-			DurationMs: time.Since(start).Milliseconds(),
-			RemoteIP:   remoteAddr,
+			Timestamp:     start,
+			Protocol:      proto,
+			Route:         route.Name,
+			Listener:      lnName,
+			RemoteIP:      remoteAddr,
+			MinecraftInfo: meta.Minecraft,
 		})
+
+		route.Handler.ServeTCP(conn, meta)
 	} else if conn.IsTLS() {
 		gw.handleTLSConnection(ctx, lnName, conn)
 	} else if conn.IsHTTP() {

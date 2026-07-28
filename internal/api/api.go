@@ -65,7 +65,31 @@ func New(gw *gateway.Gateway, db *sql.DB, fw firewall.Manager) (*API, error) {
 
 	// Wire gateway log events into the SSE broadcaster.
 	gw.OnLogEvent = func(event gateway.LogEvent) {
-		DefaultLogBroadcaster.Broadcast(event)
+		var mc *MinecraftInfoSpec
+		if event.MinecraftInfo != nil {
+			mc = &MinecraftInfoSpec{
+				RequestedHost:   event.MinecraftInfo.RequestedHost,
+				RequestedPort:   event.MinecraftInfo.RequestedPort,
+				ProtocolState:   event.MinecraftInfo.ProtocolState,
+				ProtocolVersion: event.MinecraftInfo.ProtocolVersion,
+				Username:        event.MinecraftInfo.Username,
+				IsLoginStart:    event.MinecraftInfo.IsLoginStart,
+			}
+		}
+		apiEvent := LogEvent{
+			Timestamp:     event.Timestamp,
+			Protocol:      event.Protocol,
+			Route:         event.Route,
+			Listener:      event.Listener,
+			Method:        event.Method,
+			Path:          event.Path,
+			Status:        event.Status,
+			DurationMs:    event.DurationMs,
+			RemoteIP:      event.RemoteIP,
+			Error:         event.Error,
+			MinecraftInfo: mc,
+		}
+		DefaultLogBroadcaster.Broadcast(apiEvent)
 	}
 
 	return api, nil
@@ -75,6 +99,9 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 	if spec == nil {
 		return nil, nil
 	}
+
+	devCert, _ := acme.GenerateSelfSignedCert(spec.Domains)
+
 	if spec.Auto {
 		acmeMgr, err := acme.NewManager(acme.Config{
 			Domains: spec.Domains,
@@ -82,26 +109,44 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize ACME auto-cert manager: %w", err)
 		}
-		return gateway.TLSConfigHandlerFunc(func(info *gateway.TLSInfo) (*tls.Config, error) {
-			cert, err := acmeMgr.GetCertificate(&tls.ClientHelloInfo{ServerName: info.SNI})
-			if err != nil {
-				return nil, err
+		if acmeMgr.HasDNSProvider() {
+			for _, d := range spec.Domains {
+				if d != "" && d != "localhost" && strings.Contains(d, ".") {
+					_, _ = acmeMgr.ObtainWildcardCertificate(d)
+				}
 			}
-			return &tls.Config{Certificates: []tls.Certificate{*cert}}, nil
-		}), nil
+			return gateway.TLSConfigHandlerFunc(func(info *gateway.TLSInfo) (*tls.Config, error) {
+				cert, err := acmeMgr.GetCertificate(&tls.ClientHelloInfo{ServerName: info.SNI})
+				if err == nil && cert != nil {
+					return &tls.Config{Certificates: []tls.Certificate{*cert}}, nil
+				}
+				if devCert != nil {
+					return &tls.Config{Certificates: []tls.Certificate{*devCert}}, nil
+				}
+				return nil, err
+			}), nil
+		}
 	}
+
 	if spec.Cert != "" && spec.Key != "" {
 		cert, err := tls.X509KeyPair([]byte(spec.Cert), []byte(spec.Key))
-		if err != nil {
-			return nil, fmt.Errorf("invalid TLS cert/key pair: %w", err)
+		if err == nil {
+			return gateway.TLSConfigHandlerFunc(func(info *gateway.TLSInfo) (*tls.Config, error) {
+				return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
+			}), nil
 		}
+	}
+
+	// Default fallback: Generate self-signed cert for local dev HTTPS
+	if devCert != nil {
 		tlsConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
+			Certificates: []tls.Certificate{*devCert},
 		}
 		return gateway.TLSConfigHandlerFunc(func(info *gateway.TLSInfo) (*tls.Config, error) {
 			return tlsConfig, nil
 		}), nil
 	}
+
 	return nil, nil
 }
 

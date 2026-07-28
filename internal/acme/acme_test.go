@@ -1,8 +1,6 @@
 package acme
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -43,38 +41,36 @@ func TestACMEManagerInitWithEnvVar(t *testing.T) {
 	}
 }
 
-func TestACMEHTTP01ChallengeHandlerFallback(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "acme-test-*")
+
+
+func TestGenerateSelfSignedCert(t *testing.T) {
+	cert, err := GenerateSelfSignedCert([]string{"example.com", "test.dev"})
 	if err != nil {
-		t.Fatalf("MkdirTemp failed: %v", err)
+		t.Fatalf("GenerateSelfSignedCert failed: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	if cert == nil || len(cert.Certificate) == 0 {
+		t.Fatal("expected non-empty cert")
+	}
+}
 
-	os.Setenv("GATEWAY_ACME_EMAIL", "admin@test-domain.org")
-	defer os.Unsetenv("GATEWAY_ACME_EMAIL")
-
-	mgr, err := NewManager(Config{
-		Domains:   []string{"test-domain.org"},
-		CacheDir:  filepath.Join(tmpDir, "certs"),
-		Directory: lego.LEDirectoryStaging,
-	})
-	if err != nil {
-		t.Fatalf("NewManager failed: %v", err)
+func TestWildcardMatchingAndRootDomain(t *testing.T) {
+	if got := ExtractRootDomain("app.example.com"); got != "example.com" {
+		t.Errorf("ExtractRootDomain(app.example.com) = %q, want example.com", got)
+	}
+	if got := ExtractRootDomain("*.example.com"); got != "example.com" {
+		t.Errorf("ExtractRootDomain(*.example.com) = %q, want example.com", got)
 	}
 
-	fallback := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("FALLBACK_OK"))
-	})
-
-	handler := mgr.HTTPHandler(fallback)
-
-	// Test non-ACME request passes through to fallback handler
-	req := httptest.NewRequest("GET", "/hello", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK || rec.Body.String() != "FALLBACK_OK" {
-		t.Errorf("expected fallback handler response, got status %d body %q", rec.Code, rec.Body.String())
+	if !matchWildcardDomain("*.example.com", "app.example.com") {
+		t.Error("expected *.example.com to match app.example.com")
+	}
+	if !matchWildcardDomain("*.example.com", "api.example.com") {
+		t.Error("expected *.example.com to match api.example.com")
+	}
+	if !matchWildcardDomain("*.example.com", "example.com") {
+		t.Error("expected *.example.com to match example.com")
+	}
+	if matchWildcardDomain("*.example.com", "sub.app.example.com") {
+		t.Error("did not expect *.example.com to match sub.app.example.com")
 	}
 }

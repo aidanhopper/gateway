@@ -22,19 +22,31 @@ type HTTPStripPrefix struct {
 }
 
 func (h *HTTPStripPrefix) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.Prefix != "" && strings.HasPrefix(r.URL.Path, h.Prefix) {
-		r2 := new(http.Request)
-		*r2 = *r
-		r2.URL = new(url.URL)
-		*r2.URL = *r.URL
-		r2.URL.Path = strings.TrimPrefix(r.URL.Path, h.Prefix)
-		if !strings.HasPrefix(r2.URL.Path, "/") {
-			r2.URL.Path = "/" + r2.URL.Path
+	if h.Prefix != "" && h.Prefix != "/" {
+		cleanPrefix := strings.TrimSuffix(h.Prefix, "/")
+		if r.URL.Path == cleanPrefix {
+			targetURL := cleanPrefix + "/"
+			if r.URL.RawQuery != "" {
+				targetURL += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, targetURL, http.StatusMovedPermanently)
+			return
 		}
-		if h.Next != nil {
-			h.Next.ServeHTTP(w, r2)
+
+		if strings.HasPrefix(r.URL.Path, cleanPrefix+"/") {
+			r2 := new(http.Request)
+			*r2 = *r
+			r2.URL = new(url.URL)
+			*r2.URL = *r.URL
+			r2.URL.Path = strings.TrimPrefix(r.URL.Path, cleanPrefix)
+			if !strings.HasPrefix(r2.URL.Path, "/") {
+				r2.URL.Path = "/" + r2.URL.Path
+			}
+			if h.Next != nil {
+				h.Next.ServeHTTP(w, r2)
+			}
+			return
 		}
-		return
 	}
 	if h.Next != nil {
 		h.Next.ServeHTTP(w, r)
@@ -66,10 +78,10 @@ func (h *HTTPAddPrefix) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // HTTPHeaders injects and removes request and response headers.
 type HTTPHeaders struct {
-	AddRequestHeaders    map[string]string
-	AddResponseHeaders   map[string]string
+	AddRequestHeaders     map[string]string
+	AddResponseHeaders    map[string]string
 	RemoveResponseHeaders []string
-	Next                 http.Handler
+	Next                  http.Handler
 }
 
 func (h *HTTPHeaders) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +113,29 @@ func (h *HTTPRedirect) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if status == 0 {
 		status = http.StatusMovedPermanently
 	}
-	http.Redirect(w, r, h.URL, status)
+
+	targetURL := strings.TrimSpace(h.URL)
+	reqURI := r.URL.RequestURI()
+
+	if targetURL == "" {
+		host := r.Host
+		if host == "" {
+			host = r.URL.Host
+		}
+		targetURL = "https://" + host + reqURI
+	} else if strings.HasPrefix(targetURL, "https://") || strings.HasPrefix(targetURL, "http://") {
+		schemeEnd := strings.Index(targetURL, "://")
+		if schemeEnd != -1 {
+			rest := targetURL[schemeEnd+3:]
+			pathStart := strings.Index(rest, "/")
+			if pathStart == -1 || rest[pathStart:] == "/" {
+				base := strings.TrimRight(targetURL, "/")
+				targetURL = base + reqURI
+			}
+		}
+	}
+
+	http.Redirect(w, r, targetURL, status)
 }
 
 // HTTPBasicAuth verifies HTTP Basic Auth credentials.

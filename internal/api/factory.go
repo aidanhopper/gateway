@@ -199,20 +199,33 @@ type HTTPStaticFactory struct{}
 func (f HTTPStaticFactory) Protocol() string { return "http" }
 func (f HTTPStaticFactory) Validate(spec HandlerSpec) error { return nil }
 func (f HTTPStaticFactory) Build(spec HandlerSpec, buildNext BuildNextFunc) (any, error) {
-	status := 200
-	if s, ok := spec.Config["status"].(float64); ok {
-		status = int(s)
-	} else if s, ok := spec.Config["status"].(int); ok {
-		status = s
+	if body, ok := spec.Config["body"].(string); ok && body != "" {
+		status := 200
+		if s, ok := spec.Config["status"].(float64); ok {
+			status = int(s)
+		} else if s, ok := spec.Config["status"].(int); ok {
+			status = s
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			w.Write([]byte(body))
+		}), nil
 	}
-	body := ""
-	if b, ok := spec.Config["body"].(string); ok {
-		body = b
+
+	dir, _ := spec.Config["dir"].(string)
+	if strings.TrimSpace(dir) == "" {
+		dir = "."
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(status)
-		w.Write([]byte(body))
-	}), nil
+	spa, _ := spec.Config["spa"].(bool)
+	browse, _ := spec.Config["browse"].(bool)
+	index, _ := spec.Config["index"].(string)
+
+	return &handlers.HTTPStatic{
+		Dir:    dir,
+		SPA:    spa,
+		Index:  index,
+		Browse: browse,
+	}, nil
 }
 
 type HTTPStripPrefixFactory struct{}
