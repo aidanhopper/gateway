@@ -4,13 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
-	"log"
-	"net"
-	"net/http/httputil"
-	"net/url"
+	"time"
 
 	"github.com/aidanhopper/gateway/internal/gateway"
+	"github.com/aidanhopper/gateway/internal/handlers"
 )
 
 func BasicTLS() gateway.TLSConfigHandler {
@@ -30,57 +27,46 @@ func BasicTLS() gateway.TLSConfigHandler {
 func main() {
 	gw := gateway.New()
 
-	gw.AddListener(gateway.Listener{
-		Name:       "web",
-		Address:    ":8080",
-		Protocol:   gateway.ProtoTCP,
-		TLSHandler: BasicTLS(),
-	})
+	// gw.AddListener(gateway.Listener{
+	// 	Name:       "minecraft",
+	// 	Address:    ":25565",
+	// 	Protocol:   gateway.ProtoTCP,
+	// 	TLSHandler: BasicTLS(),
+	// })
 
-	gw.AddListener(gateway.Listener{
-		Name:     "minecraft",
-		Address:  ":25565",
-		Protocol: gateway.ProtoTCP,
-	})
+	// url, _ := url.Parse("http://docker-server:8096")
+	// gw.AddHTTPRoute(gateway.HTTPRoute{
+	// 	Name:     "hello",
+	// 	Listener: "minecraft",
+	// 	Rule:     gateway.Secure(),
+	// 	Handler:  httputil.NewSingleHostReverseProxy(url),
+	// })
 
-	url, _ := url.Parse("http://docker-server:8096")
+	// gw.AddTCPRoute(gateway.TCPRoute{
+	// 	Name:     "vanilla server",
+	// 	Listener: "minecraft",
+	// 	Rule:     gateway.And(gateway.IsMinecraft(), gateway.MinecraftPlayer("didscare")),
+	// 	Priority: 1,
+	// 	Handler:  handlers.NewTCPReverseProxy("docker-server:25565"),
+	// })
 
-	gw.AddHTTPRoute(gateway.HTTPRoute{
-		Name:     "hello",
-		Listener: "web",
-		Rule:     gateway.Secure(),
-		Handler:  httputil.NewSingleHostReverseProxy(url),
-	})
+	go gw.Listen(context.Background())
 
-	gw.AddTCPRoute(gateway.TCPRoute{
-		Name:     "echo back server",
-		Listener: "minecraft",
-		Rule:     gateway.Any[gateway.TCPMetadata](),
-		Handler: gateway.TCPHandlerFunc(func(conn net.Conn, metadata gateway.TCPMetadata) {
-			str := fmt.Sprintf("Hello %s\n", metadata.TCP)
-			for range 1000 {
-				conn.Write([]byte(str))
-			}
-		}),
-	})
-
-	gw.AddTCPRoute(gateway.TCPRoute{
-		Name:     "vanilla server",
-		Listener: "minecraft",
-		Rule:     gateway.And(gateway.IsMinecraft(), gateway.MinecraftPlayer("didscare")),
-		Priority: 1,
-		Handler: gateway.TCPHandlerFunc(func(conn net.Conn, metadata gateway.TCPMetadata) {
-			defer conn.Close()
-			upstream, err := net.Dial("tcp", "docker-server:25565")
-			if err != nil {
-				return
-			}
-			defer upstream.Close()
-
-			go io.Copy(upstream, conn)
-			io.Copy(conn, upstream)
-		}),
-	})
-
-	log.Fatal(gw.Listen(context.Background()))
+	for {
+		gw.AddListener(gateway.Listener{
+			Name:       "web",
+			Address:    ":8080",
+			Protocol:   gateway.ProtoTCP,
+			TLSHandler: BasicTLS(),
+		})
+		gw.AddTCPRoute(gateway.TCPRoute{
+			Name:     "echo back server",
+			Listener: "web",
+			Rule:     gateway.And(gateway.NotHTTP(), gateway.NotMinecraft(), gateway.NotTLS()),
+			Handler:  handlers.NewTCPEchoServer(),
+		})
+		time.Sleep(3 * time.Second)
+		gw.RemoveListener("web")
+		time.Sleep(3 * time.Second)
+	}
 }

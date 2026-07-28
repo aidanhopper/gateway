@@ -144,9 +144,27 @@ func RemoteIP(ip string) HTTPRule {
 	})
 }
 
+func NotTLS() TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		return m.TLS == nil
+	})
+}
+
+func NotHTTP() TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		return !m.IsHTTP
+	})
+}
+
 func IsMinecraft() TCPRule {
 	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
 		return m.Minecraft != nil
+	})
+}
+
+func NotMinecraft() TCPRule {
+	return RuleFunc[TCPMetadata](func(m TCPMetadata) bool {
+		return m.Minecraft == nil
 	})
 }
 

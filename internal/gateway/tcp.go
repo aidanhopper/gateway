@@ -10,6 +10,7 @@ type TCPMetadata struct {
 	Minecraft *MinecraftInfo
 	TCP       *TCPInfo
 	TLS       *TLSInfo
+	IsHTTP    bool
 }
 
 type TCPInfo struct {
@@ -91,5 +92,6 @@ func newTCPMetadata(conn *tcpConn) TCPMetadata {
 		Minecraft: minecraftInfo,
 		TLS:       tlsInfo,
 		TCP:       tcpInfo,
+		IsHTTP:    conn.IsHTTP(),
 	}
 }
