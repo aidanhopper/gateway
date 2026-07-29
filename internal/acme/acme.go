@@ -13,11 +13,11 @@ import (
 	"math/big"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/aidanhopper/gateway/internal/config"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
@@ -111,12 +111,7 @@ func NewManager(cfg Config) (*Manager, error) {
 
 	cacheDir := strings.TrimSpace(cfg.CacheDir)
 	if cacheDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			cacheDir = os.TempDir()
-		} else {
-			cacheDir = filepath.Join(homeDir, ".gateway", "acme_certs")
-		}
+		cacheDir = config.ACMECacheDir()
 	}
 
 	if err := os.MkdirAll(cacheDir, 0700); err != nil {

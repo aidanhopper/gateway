@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/aidanhopper/gateway/internal/api"
+	"github.com/aidanhopper/gateway/internal/config"
 )
 
 // Client encapsulates interactions with the Gateway REST API and provides offline SQLite fallback.
@@ -20,35 +19,49 @@ type Client struct {
 	BaseURL    string
 	Token      string
 	DBPath     string
+	SiteName   string
+	Profile    config.SiteProfile
 	HTTPClient *http.Client
 }
 
-// NewClient initializes a Client using environment variables or explicit flags.
-func NewClient(apiAddr, token, dbPath string) *Client {
-	if apiAddr == "" {
-		apiAddr = os.Getenv("GATEWAY_API_ADDR")
-	}
-	if apiAddr == "" {
-		apiAddr = "http://127.0.0.1:9090"
-	}
-
-	if token == "" {
-		token = os.Getenv("GATEWAY_API_TOKEN")
+// NewClient initializes a Client targeting the given named site (or empty string
+// to apply the standard priority-order resolution).
+func NewClient(siteName string) *Client {
+	cfg, _ := config.LoadConfig()
+	if cfg == nil {
+		cfg = &config.Config{Sites: map[string]config.SiteProfile{}}
 	}
 
-	if dbPath == "" {
-		dbPath = os.Getenv("GATEWAY_DB")
-	}
-	if dbPath == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			dbPath = filepath.Join(home, ".gateway", "gateway.db")
-		} else {
-			dbPath = "./gateway.db"
-		}
+	profile, err := config.ResolveSite(cfg, siteName)
+	resolvedName := config.ResolveSiteName(cfg, siteName)
+	if err != nil {
+		// If the named site cannot be resolved, fall through to defaults
+		profile = config.SiteProfile{URL: "http://127.0.0.1:9090"}
 	}
 
 	return &Client{
-		BaseURL: strings.TrimRight(apiAddr, "/"),
+		BaseURL:  strings.TrimRight(profile.URL, "/"),
+		Token:    profile.Token,
+		DBPath:   config.DBPath(),
+		SiteName: resolvedName,
+		Profile:  profile,
+		HTTPClient: &http.Client{
+			Timeout: 3 * time.Second,
+		},
+	}
+}
+
+// newClientDirect constructs a Client with explicit connection parameters.
+// Used in tests and offline DB fallback scenarios.
+func newClientDirect(apiURL, token, dbPath string) *Client {
+	if apiURL == "" {
+		apiURL = "http://127.0.0.1:9090"
+	}
+	if dbPath == "" {
+		dbPath = config.DBPath()
+	}
+	return &Client{
+		BaseURL: strings.TrimRight(apiURL, "/"),
 		Token:   token,
 		DBPath:  dbPath,
 		HTTPClient: &http.Client{
@@ -109,6 +122,12 @@ func (c *Client) request(ctx context.Context, method, endpoint string, body any)
 	}
 
 	if resp.StatusCode >= 400 {
+		var errResp struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(respBytes, &errResp) == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("%s", errResp.Error)
+		}
 		return nil, fmt.Errorf("API error (%d): %s", resp.StatusCode, string(respBytes))
 	}
 

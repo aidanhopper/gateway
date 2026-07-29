@@ -87,7 +87,7 @@ func setupTestAPI(t *testing.T) (*API, *gateway.Gateway, string) {
 
 	gw := gateway.New()
 	fw := firewall.NewNoopManager()
-	api, err := New(gw, db, fw)
+	api, err := New(gw, db, fw, false)
 	if err != nil {
 		t.Fatalf("New API failed: %v", err)
 	}
@@ -311,6 +311,23 @@ func TestACMEAutoCertEmailRequired(t *testing.T) {
 	}
 }
 
+func TestLocalhostTLSCertNoEmailRequired(t *testing.T) {
+	os.Unsetenv("GATEWAY_ACME_EMAIL")
+
+	api, _, token := setupTestAPI(t)
+	handler := NewHandler(api)
+
+	listenerJSON := `{"name":"local-tls-ln","address":":8445","protocol":"tcp","tls":{"auto":true,"domains":["github.localhost"]}}`
+	req := httptest.NewRequest("POST", "/api/v1/listeners", bytes.NewBufferString(listenerJSON))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated && rec.Code != http.StatusOK {
+		t.Fatalf("expected 201 Created for localhost TLS cert without ACME email, got status %d body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAPIACMEListenerCreationWithEnvVar(t *testing.T) {
 	os.Setenv("GATEWAY_ACME_EMAIL", "admin@test-domain.org")
 	defer os.Unsetenv("GATEWAY_ACME_EMAIL")
@@ -351,7 +368,7 @@ func TestStaticTLSTermination(t *testing.T) {
 	_, token, _ := CreateToken(db, "tls-token")
 	gw := gateway.New()
 	fw := firewall.NewNoopManager()
-	api, err := New(gw, db, fw)
+	api, err := New(gw, db, fw, false)
 	if err != nil {
 		t.Fatalf("New API failed: %v", err)
 	}
@@ -492,7 +509,7 @@ func TestE2ENetworkRoutingViaAPI(t *testing.T) {
 
 	gw := gateway.New()
 	fw := firewall.NewNoopManager()
-	api, err := New(gw, db, fw)
+	api, err := New(gw, db, fw, false)
 	if err != nil {
 		t.Fatalf("New API failed: %v", err)
 	}

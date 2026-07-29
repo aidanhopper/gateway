@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
@@ -101,16 +100,18 @@ func FormatStrategy(handler api.HandlerSpec) string {
 }
 
 // RunStatus displays a Tailscale-style status dashboard of daemon health, listeners, and routes.
-func RunStatus(apiAddr, token, dbPath string) {
+func RunStatus(args []string) {
+	siteName, _ := extractSiteFlag(args)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	client := NewClient(apiAddr, token, dbPath)
+	client := NewClient(siteName)
 
-	_, healthErr := client.Health(ctx)
-	daemonStatus := "Running"
+	healthData, healthErr := client.Health(ctx)
+	daemonStatus := BadgeSuccess("[RUNNING]")
 	if healthErr != nil {
-		daemonStatus = "Offline / Unreachable"
+		daemonStatus = BadgeError("[OFFLINE]")
+		healthData = map[string]any{}
 	}
 
 	fwDriver := os.Getenv("GATEWAY_FIREWALL")
@@ -118,55 +119,67 @@ func RunStatus(apiAddr, token, dbPath string) {
 		fwDriver = "auto"
 	}
 
-	fmt.Println("=========================================================================================")
+	visibilityStr := "private"
+	if pub, _ := healthData["public"].(bool); pub {
+		visibilityStr = BadgeWarning("PUBLIC (Open Internet)")
+	}
+
+	siteNameStr := client.SiteName
+	if siteNameStr == "" {
+		siteNameStr = "default"
+	}
+
+	divLine := "========================================================================================="
+	fmt.Println(divLine)
 	fmt.Printf("Gateway Daemon Status: %s\n", daemonStatus)
+	fmt.Printf("Target Site:           %s (%s)\n", siteNameStr, visibilityStr)
 	fmt.Printf("API Address:           %s\n", client.BaseURL)
 	fmt.Printf("Database Path:         %s\n", client.DBPath)
 	fmt.Printf("Firewall Driver:       %s\n", fwDriver)
-	fmt.Println("=========================================================================================")
+	fmt.Println(divLine)
 
 	// Listeners
 	listeners, err := client.ListListeners(ctx)
 	if err != nil && healthErr != nil {
-		log.Fatalf("failed to retrieve status: %v", err)
+		fmt.Fprintf(os.Stderr, "[ERROR] Failed to retrieve status: %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("\nLISTENERS (%d)\n", len(listeners))
 	if len(listeners) == 0 {
 		fmt.Println("No listeners registered.")
 	} else {
-		fmt.Printf("%-20s %-20s %-10s %-10s\n", "NAME", "ADDRESS", "PROTOCOL", "STATUS")
-		fmt.Println("-----------------------------------------------------------------------------------------")
+		lnTable := NewTable("NAME", "ADDRESS", "PROTOCOL", "STATUS")
 		for _, ln := range listeners {
-			status := "ACTIVE"
+			statusBadge := BadgeSuccess("[ACTIVE]")
 			if healthErr != nil {
-				status = "OFFLINE"
+				statusBadge = BadgeError("[OFFLINE]")
 			}
-			fmt.Printf("%-20s %-20s %-10s %-10s\n", ln.Name, ln.Address, ln.Protocol, status)
+			lnTable.AddRow(ln.Name, ln.Address, ln.Protocol, statusBadge)
 		}
+		fmt.Print(lnTable.String())
 	}
 
 	// Routes
 	routes, err := client.ListRoutes(ctx)
 	if err != nil && healthErr != nil {
-		log.Fatalf("failed to retrieve routes: %v", err)
+		fmt.Fprintf(os.Stderr, "[ERROR] Failed to retrieve routes: %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("\nROUTES (%d)\n", len(routes))
 	if len(routes) == 0 {
 		fmt.Println("No routes registered.")
 	} else {
-		fmt.Printf("%-18s %-12s %-8s %-25s %-20s %-12s %-12s\n", "NAME", "LISTENER", "PROTO", "RULE / MATCH", "TARGETS", "STRATEGY", "EXPIRES IN")
-		fmt.Println("---------------------------------------------------------------------------------------------------")
+		routeTable := NewTable("NAME", "LISTENER", "PROTO", "RULE / MATCH", "TARGETS", "STRATEGY", "EXPIRES IN")
 		for _, r := range routes {
 			ruleSummary := FormatRuleSummary(r.Rule)
 			targetsSummary := FormatTargetsSummary(r.Handler)
 			strategy := FormatStrategy(r.Handler)
-			ttlRemaining := FormatTTLRemaining(time.Now(), r.TTL) // fallback display
+			ttlRemaining := FormatTTLRemaining(time.Now(), r.TTL)
 
-			fmt.Printf("%-18s %-12s %-8s %-25s %-20s %-12s %-12s\n",
-				r.Name, r.Listener, r.Protocol, ruleSummary, targetsSummary, strategy, ttlRemaining)
+			routeTable.AddRow(r.Name, r.Listener, r.Protocol, ruleSummary, targetsSummary, strategy, ttlRemaining)
 		}
+		fmt.Print(routeTable.String())
 	}
-	fmt.Println()
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,70 +11,161 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/aidanhopper/gateway/internal/api"
+	"github.com/aidanhopper/gateway/internal/config"
 	"github.com/aidanhopper/gateway/internal/firewall"
 	"github.com/aidanhopper/gateway/internal/gateway"
 )
 
-func getDefaultDBPath() string {
-	if envDB := os.Getenv("GATEWAY_DB"); envDB != "" {
-		return envDB
+// PromptInput prints a prompt string and reads line input from stdin.
+// If Ctrl+C (SIGINT/SIGTERM) is pressed while waiting for input, it prints
+// "[INFO] Operation cancelled." and exits code 0 cleanly.
+func PromptInput(prompt string) string {
+	if prompt != "" {
+		fmt.Print(prompt)
 	}
-	home, err := os.UserHomeDir()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	type result struct {
+		line string
+	}
+	resChan := make(chan result, 1)
+
+	go func() {
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		resChan <- result{line: strings.TrimSpace(line)}
+	}()
+
+	select {
+	case <-sigChan:
+		signal.Stop(sigChan)
+		fmt.Println("\n[INFO] Operation cancelled.")
+		os.Exit(0)
+		return ""
+	case res := <-resChan:
+		signal.Stop(sigChan)
+		return res.line
+	}
+}
+
+// loadServerDefaults loads the server config file + env vars and returns
+// resolved defaults for use as flag default values in RunDaemon.
+func loadServerDefaults() *config.ServerConfig {
+	cfg, err := config.LoadServerConfig()
 	if err != nil {
-		return "./gateway.db"
+		log.Printf("[WARNING] Could not load server config: %v", err)
+		cfg = &config.ServerConfig{}
 	}
-	return filepath.Join(home, ".gateway", "gateway.db")
-}
-
-func getDefaultAddr() string {
-	if envAddr := os.Getenv("GATEWAY_ADDR"); envAddr != "" {
-		return envAddr
+	// Apply built-in fallbacks for unset fields
+	if cfg.Addr == "" {
+		cfg.Addr = "0.0.0.0:9090"
 	}
-	return "0.0.0.0:9090"
-}
-
-func getDefaultFirewall() string {
-	if envFW := os.Getenv("GATEWAY_FIREWALL"); envFW != "" {
-		return envFW
+	if cfg.DB == "" {
+		cfg.DB = config.DBPath()
 	}
-	return "auto"
-}
-
-func getDefaultProtectedPorts() string {
-	if envProt := os.Getenv("GATEWAY_PROTECTED_PORTS"); envProt != "" {
-		return envProt
+	if cfg.Firewall == "" {
+		cfg.Firewall = "auto"
 	}
-	return "22/tcp"
+	if len(cfg.ProtectedPorts) == 0 {
+		cfg.ProtectedPorts = config.StringOrList{"22/tcp"}
+	}
+	return cfg
 }
 
 // PrintUsage prints high-level CLI usage options.
 func PrintUsage() {
 	fmt.Println("Usage: gateway <command> [subcommand] [flags]")
-	fmt.Println("\nDaemon & Overview:")
-	fmt.Println("  daemon           Start the gateway proxy server and REST API daemon")
-	fmt.Println("  status           Display status overview of daemon, listeners, and routes")
-	fmt.Println("\nService Exposure:")
-	fmt.Println("  serve            Expose local services (http, https, tcp, udp, minecraft)")
-	fmt.Println("                   Use --watch / -w to stream logs live and delete route on Ctrl+C")
-	fmt.Println("\nManagement Commands:")
-	fmt.Println("  token            Manage API authentication tokens (create, list, revoke)")
-	fmt.Println("  listener         Manage listeners (list, create, delete)")
-	fmt.Println("  route            Manage routes (list, create, delete)")
+	fmt.Printf("\n%s\n", ColorBold("Daemon & Overview:"))
+	fmt.Println("  daemon                    Start the gateway proxy server and REST API daemon")
+	fmt.Println("  status (stat)             DisplayTailscale-style status overview of daemon, listeners, and routes")
+	fmt.Println("  logs (log)                Stream live logs for active proxy routes")
+	fmt.Printf("\n%s\n", ColorBold("Service Exposure:"))
+	fmt.Println("  serve (s)                 Expose local services (http, https, dir, static, file, spa, tcp, udp, mc)")
+	fmt.Println("                            Example: gateway serve app.domain.com 3000 --1h")
+	fmt.Printf("\n%s\n", ColorBold("Site Management:"))
+	fmt.Println("  site (sites)              Manage target Gateway sites (list, use, ping)")
+	fmt.Println("                            Config: ~/.config/gateway/config.yaml")
+	fmt.Printf("\n%s\n", ColorBold("Management Commands:"))
+	fmt.Println("  token (tokens)            Manage API authentication tokens (create, list, revoke)")
+	fmt.Println("  listener (listeners)      Inspect and force-delete listeners (list, delete)")
+	fmt.Println("  route (routes)            Inspect and force-delete routes (list, delete)")
+	fmt.Printf("\n%s\n", ColorBold("Global Flags:"))
+	fmt.Println("  --site <name>             Target a specific Gateway site for any command")
+	fmt.Println("  --yes, -y                 Bypass interactive confirmation prompts")
+	fmt.Printf("\n%s\n", ColorBold("EXAMPLES:"))
+	fmt.Println("  $ gateway serve http / 8080               Expose local port 8080 on HTTP")
+	fmt.Println("  $ gateway serve app.domain.com 3000       Expose app.domain.com on HTTPS with auto-cert")
+	fmt.Println("  $ gateway logs                            Stream live logs for background routes")
+	fmt.Println("  $ gateway status                          Display active listeners and proxy routes")
+}
+
+// ConfirmPublicSiteExposure prompts for interactive confirmation if the target
+// Gateway daemon reports itself as publicly exposed. Visibility is server-authoritative:
+// set public: true in ~/.config/gateway/server.yaml or GATEWAY_PUBLIC=true on the daemon.
+// If the daemon is unreachable the prompt is skipped (routes would fail anyway).
+func ConfirmPublicSiteExposure(client *Client, yesFlag bool, targetDesc string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	health, err := client.Health(ctx)
+	if err != nil {
+		// Daemon unreachable — cannot be publicly serving traffic; skip prompt.
+		return true
+	}
+
+	isPublic, _ := health["public"].(bool)
+	if !isPublic {
+		return true
+	}
+
+	siteDisplayName := client.SiteName
+	if siteDisplayName == "" {
+		siteDisplayName = "default"
+	}
+	fmt.Printf("%s Target site %q is PUBLICLY exposed to the open Internet (%s).\n", BadgeWarning("[WARNING]"), siteDisplayName, client.BaseURL)
+	if targetDesc != "" {
+		fmt.Printf("%s %s will be publicly accessible.\n", BadgeInfo("[INFO]"), targetDesc)
+	}
+
+	if yesFlag {
+		return true
+	}
+
+	if fileInfo, err := os.Stdin.Stat(); err == nil && (fileInfo.Mode()&os.ModeCharDevice) == 0 {
+		fmt.Fprintf(os.Stderr, "%s Target site %q is public. Exposing to open Internet requires -y / --yes flag in non-interactive shell.\n", BadgeError("[ERROR]"), siteDisplayName)
+		os.Exit(2)
+	}
+
+	input := strings.ToLower(PromptInput("\nAre you sure you want to proceed? [y/N]: "))
+	if input == "y" || input == "yes" {
+		return true
+	}
+	fmt.Printf("%s Operation cancelled.\n", BadgeInfo("[INFO]"))
+	return false
 }
 
 // RunDaemon starts the Gateway network proxy engine and REST API server.
 func RunDaemon(args []string) {
+	// Load server config file + env vars first; CLI flags override.
+	defaults := loadServerDefaults()
+
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
-	dbPath := fs.String("db", getDefaultDBPath(), "Path to SQLite database file")
-	addr := fs.String("addr", getDefaultAddr(), "REST API listen address")
-	fwDriver := fs.String("firewall", getDefaultFirewall(), "Firewall driver (auto, dry, none, ufw, firewalld, nftables, iptables)")
-	protectedPorts := fs.String("protected-ports", getDefaultProtectedPorts(), "Protected ports that can never be closed (e.g. 22/tcp)")
+	dbPath := fs.String("db", defaults.DB, "Path to SQLite database file")
+	addr := fs.String("addr", defaults.Addr, "REST API listen address")
+	fwDriver := fs.String("firewall", defaults.Firewall, "Firewall driver (auto, dry, none, ufw, firewalld, nftables, iptables)")
+	protectedPorts := fs.String("protected-ports", defaults.ProtectedPorts.String(), "Protected ports that can never be closed (e.g. 22/tcp or 22/tcp,2222/tcp)")
 	_ = fs.Parse(args)
+
+	// Resolve final public value: server config/env set the baseline;
+	// there is no --public flag by design.
+	isPublic := defaults.Public
 
 	db, err := api.OpenDB(*dbPath)
 	if err != nil {
@@ -84,7 +176,7 @@ func RunDaemon(args []string) {
 	fwManager := firewall.Detect(*fwDriver, *protectedPorts)
 
 	gw := gateway.New()
-	apiServer, err := api.New(gw, db, fwManager)
+	apiServer, err := api.New(gw, db, fwManager, isPublic)
 	if err != nil {
 		log.Fatalf("failed to initialize api server: %v", err)
 	}
@@ -99,7 +191,12 @@ func RunDaemon(args []string) {
 	}
 
 	go func() {
-		log.Printf("REST API server listening on %s (DB: %s, Firewall: %s, Protected: %s)\n", *addr, *dbPath, *fwDriver, *protectedPorts)
+		publicStr := "private"
+		if isPublic {
+			publicStr = "public"
+		}
+		log.Printf("REST API server listening on %s (DB: %s, Firewall: %s, Protected: %s, Visibility: %s)\n",
+			*addr, *dbPath, *fwDriver, *protectedPorts, publicStr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("REST API server error: %v\n", err)
 		}
@@ -126,26 +223,32 @@ func RunDaemon(args []string) {
 func RunToken(subcmd string, args []string) {
 	ctx := context.Background()
 	fs := flag.NewFlagSet("token", flag.ExitOnError)
-	dbPath := fs.String("db", getDefaultDBPath(), "Path to SQLite database file")
-
-	client := NewClient("", "", *dbPath)
+	siteName, args := extractSiteFlag(args)
+	args, yesMode := extractBoolFlag(args, "y", "yes")
 
 	switch subcmd {
-	case "create":
+	case "create", "add", "new":
 		name := fs.String("name", "", "Human-readable label for the token")
 		_ = fs.Parse(args)
 
-		client.DBPath = *dbPath
+		client := NewClient(siteName)
+		if !ConfirmPublicSiteExposure(client, yesMode, "API token creation") {
+			return
+		}
+
 		id, token, err := client.CreateToken(ctx, *name)
 		if err != nil {
 			log.Fatalf("failed to create token: %v", err)
 		}
 		fmt.Printf("Created token %q (ID: %s)\nToken: %s\n", *name, id, token)
+		fmt.Printf("\n%s\n", ColorBold(ColorCyan("[NEXT STEPS]")))
+		fmt.Printf("  Export token:  export GATEWAY_API_TOKEN=%q\n", token)
+		fmt.Println("  List tokens:   gateway tokens list")
 
-	case "list":
+	case "list", "ls":
 		_ = fs.Parse(args)
+		client := NewClient(siteName)
 
-		client.DBPath = *dbPath
 		tokens, err := client.ListTokens(ctx)
 		if err != nil {
 			log.Fatalf("failed to list tokens: %v", err)
@@ -156,25 +259,25 @@ func RunToken(subcmd string, args []string) {
 			return
 		}
 
-		fmt.Printf("%-38s %-20s %-25s\n", "ID", "NAME", "CREATED AT")
-		fmt.Println("-------------------------------------------------------------------------------------")
+		tbl := NewTable("ID", "NAME", "CREATED AT")
 		for _, t := range tokens {
 			name := t.Name
 			if name == "" {
 				name = "<unnamed>"
 			}
-			fmt.Printf("%-38s %-20s %-25s\n", t.ID, name, t.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
+			tbl.AddRow(t.ID, name, t.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
 		}
+		fmt.Print(tbl.String())
 
-	case "revoke":
+	case "revoke", "delete", "rm", "del":
 		_ = fs.Parse(args)
 		if fs.NArg() < 1 {
-			fmt.Println("Usage: gateway token revoke [--db <path>] <id>")
-			os.Exit(0)
+			fmt.Println("Usage: gateway token revoke <id>")
+			os.Exit(2)
 		}
 		targetID := fs.Arg(0)
 
-		client.DBPath = *dbPath
+		client := NewClient(siteName)
 		if err := client.RevokeToken(ctx, targetID); err != nil {
 			log.Fatalf("failed to revoke token: %v", err)
 		}
@@ -182,7 +285,7 @@ func RunToken(subcmd string, args []string) {
 
 	default:
 		fmt.Println("Usage: gateway token <create|list|revoke> [flags]")
-		os.Exit(0)
+		os.Exit(2)
 	}
 }
 
@@ -190,14 +293,12 @@ func RunToken(subcmd string, args []string) {
 func RunListener(subcmd string, args []string) {
 	ctx := context.Background()
 	fs := flag.NewFlagSet("listener", flag.ExitOnError)
-	dbPath := fs.String("db", "", "Path to SQLite database file")
-	apiAddr := fs.String("api-addr", "", "REST API address")
-	token := fs.String("token", "", "Bearer token for authentication")
+	siteName, args := extractSiteFlag(args)
 
 	switch subcmd {
-	case "list":
+	case "list", "ls":
 		_ = fs.Parse(args)
-		client := NewClient(*apiAddr, *token, *dbPath)
+		client := NewClient(siteName)
 
 		listeners, err := client.ListListeners(ctx)
 		if err != nil {
@@ -209,51 +310,29 @@ func RunListener(subcmd string, args []string) {
 			return
 		}
 
-		fmt.Printf("%-20s %-20s %-10s\n", "NAME", "ADDRESS", "PROTOCOL")
-		fmt.Println("--------------------------------------------------")
+		tbl := NewTable("NAME", "ADDRESS", "PROTOCOL")
 		for _, spec := range listeners {
-			fmt.Printf("%-20s %-20s %-10s\n", spec.Name, spec.Address, spec.Protocol)
+			tbl.AddRow(spec.Name, spec.Address, spec.Protocol)
 		}
+		fmt.Print(tbl.String())
 
-	case "create":
-		name := fs.String("name", "", "Listener name")
-		addr := fs.String("address", "", "Listen address (e.g. :8080)")
-		proto := fs.String("protocol", "tcp", "Protocol (tcp|udp)")
-		_ = fs.Parse(args)
-
-		if *name == "" || *addr == "" {
-			fmt.Println("Usage: gateway listener create --name <name> --address <addr> [--protocol tcp|udp] [--token <token>]")
-			os.Exit(0)
-		}
-
-		client := NewClient(*apiAddr, *token, *dbPath)
-		spec := api.ListenerSpec{
-			Name:     *name,
-			Address:  *addr,
-			Protocol: *proto,
-		}
-		if err := client.CreateListener(ctx, spec); err != nil {
-			log.Fatalf("%v", err)
-		}
-		fmt.Printf("Created listener %q (%s/%s)\n", spec.Name, spec.Address, spec.Protocol)
-
-	case "delete":
+	case "delete", "rm", "del":
 		_ = fs.Parse(args)
 		if fs.NArg() < 1 {
-			fmt.Println("Usage: gateway listener delete [--token <token>] <name>")
-			os.Exit(0)
+			fmt.Println("Usage: gateway listener delete <name>")
+			os.Exit(2)
 		}
 		name := fs.Arg(0)
 
-		client := NewClient(*apiAddr, *token, *dbPath)
+		client := NewClient(siteName)
 		if err := client.DeleteListener(ctx, name); err != nil {
 			log.Fatalf("%v", err)
 		}
 		fmt.Printf("Deleted listener %q\n", name)
 
 	default:
-		fmt.Println("Usage: gateway listener <list|create|delete> [flags]")
-		os.Exit(0)
+		fmt.Println("Usage: gateway listener <list|delete> [flags]")
+		os.Exit(2)
 	}
 }
 
@@ -261,14 +340,12 @@ func RunListener(subcmd string, args []string) {
 func RunRoute(subcmd string, args []string) {
 	ctx := context.Background()
 	fs := flag.NewFlagSet("route", flag.ExitOnError)
-	dbPath := fs.String("db", "", "Path to SQLite database file")
-	apiAddr := fs.String("api-addr", "", "REST API address")
-	token := fs.String("token", "", "Bearer token for authentication")
+	siteName, args := extractSiteFlag(args)
 
 	switch subcmd {
-	case "list":
+	case "list", "ls":
 		_ = fs.Parse(args)
-		client := NewClient(*apiAddr, *token, *dbPath)
+		client := NewClient(siteName)
 
 		routes, err := client.ListRoutes(ctx)
 		if err != nil {
@@ -280,70 +357,29 @@ func RunRoute(subcmd string, args []string) {
 			return
 		}
 
-		fmt.Printf("%-20s %-15s %-15s %-10s\n", "NAME", "LISTENER", "PROTOCOL", "PRIORITY")
-		fmt.Println("------------------------------------------------------------------")
+		tbl := NewTable("NAME", "LISTENER", "PROTOCOL", "PRIORITY")
 		for _, spec := range routes {
-			fmt.Printf("%-20s %-15s %-15s %-10d\n", spec.Name, spec.Listener, spec.Protocol, spec.Priority)
+			tbl.AddRow(spec.Name, spec.Listener, spec.Protocol, fmt.Sprintf("%d", spec.Priority))
 		}
+		fmt.Print(tbl.String())
 
-	case "create":
-		name := fs.String("name", "", "Route name")
-		listener := fs.String("listener", "", "Listener name")
-		proto := fs.String("protocol", "http", "Protocol (http|tcp|udp)")
-		target := fs.String("target", "", "Target backend address")
-		ttlStr := fs.String("ttl", "", "Time to live duration (e.g. 30s, 15m, 2h, 1d)")
-		_ = fs.Parse(args)
-
-		if *name == "" || *listener == "" || *target == "" {
-			fmt.Println("Usage: gateway route create --name <name> --listener <ln> --target <addr> [--protocol http|tcp|udp] [--ttl <duration>]")
-			os.Exit(0)
-		}
-
-		ttlDuration, err := ParseTTL(*ttlStr)
-		if err != nil {
-			log.Fatalf("invalid ttl: %v", err)
-		}
-
-		client := NewClient(*apiAddr, *token, *dbPath)
-		handlerType := fmt.Sprintf("%s_lb", *proto)
-		spec := api.RouteSpec{
-			Name:     *name,
-			Listener: *listener,
-			Protocol: *proto,
-			Priority: 1,
-			TTL:      int(ttlDuration.Seconds()),
-			Rule:     api.RuleSpec{Type: "any"},
-			Handler: api.HandlerSpec{
-				Type:   handlerType,
-				Config: map[string]any{"target": *target},
-			},
-		}
-		if err := client.CreateRoute(ctx, spec); err != nil {
-			log.Fatalf("%v", err)
-		}
-		if ttlDuration > 0 {
-			fmt.Printf("Created route %q (%s -> %s) [TTL: %v]\n", spec.Name, spec.Protocol, *target, ttlDuration)
-		} else {
-			fmt.Printf("Created route %q (%s -> %s)\n", spec.Name, spec.Protocol, *target)
-		}
-
-	case "delete":
+	case "delete", "rm", "del":
 		_ = fs.Parse(args)
 		if fs.NArg() < 1 {
-			fmt.Println("Usage: gateway route delete [--token <token>] <name>")
-			os.Exit(0)
+			fmt.Println("Usage: gateway route delete <name>")
+			os.Exit(2)
 		}
 		name := fs.Arg(0)
 
-		client := NewClient(*apiAddr, *token, *dbPath)
+		client := NewClient(siteName)
 		if err := client.DeleteRoute(ctx, name); err != nil {
 			log.Fatalf("%v", err)
 		}
 		fmt.Printf("Deleted route %q\n", name)
 
 	default:
-		fmt.Println("Usage: gateway route <list|create|delete> [flags]")
-		os.Exit(0)
+		fmt.Println("Usage: gateway route <list|delete> [flags]")
+		os.Exit(2)
 	}
 }
 
@@ -353,5 +389,108 @@ func printJSONOrTable(data []byte) {
 		fmt.Println(pretty.String())
 	} else {
 		fmt.Println(string(data))
+	}
+}
+
+// RunLogs streams live logs for a route or all background routes.
+func RunLogs(args []string) {
+	siteName, args := extractSiteFlag(args)
+	args, yesMode := extractBoolFlag(args, "y", "yes")
+	if hasHelpFlag(args) {
+		fmt.Println("Usage: gateway logs [route_name] [flags]")
+		fmt.Println("\nFlags:")
+		fmt.Println("  --site <name>             Target a specific Gateway site")
+		fmt.Println("  --yes, -y                 Bypass interactive route picker and stream all routes")
+		fmt.Println("\nEXAMPLES:")
+		fmt.Println("  $ gateway logs                            Stream logs for active routes")
+		fmt.Println("  $ gateway logs -y                         Stream logs for all routes without prompt")
+		fmt.Println("  $ gateway logs serve-http-8080            Stream logs for specific route")
+		return
+	}
+
+	routeFilter := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		routeFilter = args[0]
+	}
+
+	client := NewClient(siteName)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	if routeFilter == "" && !yesMode {
+		routes, err := client.ListRoutes(ctx)
+		if err == nil && len(routes) > 0 {
+			if len(routes) == 1 {
+				routeFilter = routes[0].Name
+			} else {
+				if fileInfo, err := os.Stdin.Stat(); err == nil && (fileInfo.Mode()&os.ModeCharDevice) != 0 {
+					fmt.Println("\nSelect route to view logs for:")
+					for i, r := range routes {
+						fmt.Printf("  %d) %-22s (%s -> %s)\n", i+1, r.Name, r.Protocol, FormatTargetsSummary(r.Handler))
+					}
+					fmt.Printf("  %d) All routes (stream everything)\n", len(routes)+1)
+					input := PromptInput("\nEnter choice [default: all]: ")
+					var choice int
+					if _, err := fmt.Sscanf(input, "%d", &choice); err == nil && choice > 0 && choice <= len(routes) {
+						routeFilter = routes[choice-1].Name
+					}
+				}
+			}
+		}
+	}
+
+	displayTarget := routeFilter
+	if displayTarget == "" {
+		displayTarget = "all routes"
+	}
+
+	fmt.Printf("[INFO] Streaming logs for %s... Press Ctrl+C to stop.\n", displayTarget)
+	fmt.Println("-----------------------------------------------------------------------------------------")
+
+	err := client.StreamLogs(ctx, routeFilter, func(event api.LogEvent) {
+		timeStr := event.Timestamp.Format("15:04:05")
+
+		if event.MinecraftInfo != nil {
+			mcDetails := ""
+			if event.MinecraftInfo.Username != "" {
+				mcDetails = fmt.Sprintf(" [Player: %s]", event.MinecraftInfo.Username)
+			} else if event.MinecraftInfo.ProtocolState == 1 {
+				mcDetails = " [Ping/Status]"
+			} else if event.MinecraftInfo.ProtocolState == 2 {
+				mcDetails = " [Login]"
+			}
+			if event.MinecraftInfo.RequestedHost != "" {
+				mcDetails += fmt.Sprintf(" host: %s", event.MinecraftInfo.RequestedHost)
+			}
+
+			durationStr := ""
+			if event.DurationMs > 0 {
+				durationStr = fmt.Sprintf(" (%dms)", event.DurationMs)
+			}
+
+			fmt.Printf("[%s] minecraft%s%s - %s\n",
+				timeStr, mcDetails, durationStr, event.RemoteIP)
+			return
+		}
+
+		statusStr := ""
+		if event.Status > 0 {
+			statusStr = fmt.Sprintf("%d %s ", event.Status, httpStatusText(event.Status))
+		}
+		pathStr := event.Path
+		if pathStr == "" {
+			pathStr = event.Protocol
+		}
+		methodStr := event.Method
+		if methodStr != "" {
+			methodStr += " "
+		}
+
+		fmt.Printf("[%s] %s%s %s(%dms) - %s\n",
+			timeStr, methodStr, pathStr, statusStr, event.DurationMs, event.RemoteIP)
+	})
+
+	if err != nil && ctx.Err() == nil {
+		log.Fatalf("failed to stream logs: %v", err)
 	}
 }

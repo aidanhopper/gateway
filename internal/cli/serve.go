@@ -158,6 +158,67 @@ func parseServeMount(arg string) (domain string, path string) {
 	return domain, path
 }
 
+func extractRuleDomainAndPath(rule api.RuleSpec) (domain string, path string) {
+	path = "/"
+	rules := []api.RuleSpec{rule}
+	if rule.Type == "and" {
+		rules = rule.Rules
+	}
+	for _, r := range rules {
+		if r.Type == "host" {
+			domain = r.Value
+		}
+		if r.Type == "path" || r.Type == "path_prefix" {
+			path = r.Value
+		}
+	}
+	return domain, path
+}
+
+func extractHandlerTarget(h api.HandlerSpec) string {
+	if urlStr, ok := h.Config["url"].(string); ok {
+		return urlStr
+	}
+	if targetStr, ok := h.Config["target"].(string); ok {
+		return targetStr
+	}
+	if dirStr, ok := h.Config["dir"].(string); ok {
+		return dirStr
+	}
+	if fileStr, ok := h.Config["file"].(string); ok {
+		return fileStr
+	}
+	if h.Next != nil {
+		return extractHandlerTarget(*h.Next)
+	}
+	return ""
+}
+
+func hasMatchingServeRoute(ctx context.Context, client *Client, listenerName, domain, path, target string) bool {
+	routes, err := client.ListRoutes(ctx)
+	if err != nil || len(routes) == 0 {
+		return false
+	}
+
+	for _, r := range routes {
+		if r.Listener != listenerName {
+			continue
+		}
+		ruleDomain, rulePath := extractRuleDomainAndPath(r.Rule)
+		if strings.EqualFold(ruleDomain, domain) && rulePath == path {
+			if target != "" {
+				handlerTarget := extractHandlerTarget(r.Handler)
+				if strings.EqualFold(strings.TrimRight(handlerTarget, "/"), strings.TrimRight(target, "/")) {
+					return true
+				}
+			} else {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ValidateDNS checks if the domain's A/AAAA records resolve to this machine's public IP.
 func ValidateDNS(domain string) (isMatch bool, resolvedIP string, serverIP string) {
 	domain = strings.ToLower(strings.TrimSpace(domain))
@@ -225,24 +286,76 @@ func httpStatusText(code int) string {
 
 // PrintServeUsage prints usage for 'gateway serve' subcommands.
 func PrintServeUsage() {
-	fmt.Println("Usage: gateway serve <protocol|command> [args] [flags]")
+	fmt.Println("Usage: gateway serve <protocol|subcommand> [args] [flags]")
 	fmt.Println("\nProtocols:")
-	fmt.Println("  dir [https] <domain/path> <folder|file> Expose local folder/file (e.g. gateway serve dir app.domain.com/ ./dist)")
-	fmt.Println("  file [https] <domain/path> <file>      Expose single static file (e.g. gateway serve file what.domain.com/install.sh ./install.sh)")
-	fmt.Println("  spa [https] <domain/path> <folder>      Expose Single Page App with index.html fallback")
-	fmt.Println("  http <path> <target>        Expose local HTTP service (e.g. gateway serve http / 3000)")
-	fmt.Println("  https <path> <target>       Expose local service over HTTPS (e.g. gateway serve https / 3000 --acme)")
-	fmt.Println("  tcp <port> <target>         Expose TCP stream (e.g. gateway serve tcp 2222 127.0.0.1:22)")
-	fmt.Println("  udp <port> <target>         Expose UDP stream (e.g. gateway serve udp 5353 127.0.0.1:53)")
-	fmt.Println("  minecraft <port> <target>   Expose Minecraft server with player/host filters")
+	fmt.Println("  dir (static) <domain/path> <folder|file>   Expose local folder/file")
+	fmt.Println("  file <domain/path> <file>                  Expose single static file")
+	fmt.Println("  spa <domain/path> <folder>                 Expose Single Page App with index.html fallback")
+	fmt.Println("  redirect (redir) <domain/path> <target-url> Redirect HTTP/HTTPS traffic to external URL")
+	fmt.Println("  http <path> <target>                       Expose local HTTP service (e.g. gateway serve http / 3000)")
+	fmt.Println("  https <path> <target>                      Expose local service over HTTPS (e.g. gateway serve https / 3000 --acme)")
+	fmt.Println("  tcp <port> <target>                        Expose TCP stream (e.g. gateway serve tcp 2222 127.0.0.1:22)")
+	fmt.Println("  udp <port> <target>                        Expose UDP stream (e.g. gateway serve udp 5353 127.0.0.1:53)")
+	fmt.Println("  minecraft (mc) <port> <target>             Expose Minecraft server")
 	fmt.Println("\nCommon Flags:")
-	fmt.Println("  --watch, -w                 Stream live logs; delete route on Ctrl+C (default)")
-	fmt.Println("  --bg, -d                    Run in background mode")
-	fmt.Println("  --ttl <duration>            Auto-expire the route (e.g. 30s, 15m, 2h, 1d)")
+	fmt.Println("  --bg, -d                                   Run in background mode")
+	fmt.Println("  --ttl <duration>                           Auto-expire duration (e.g. 30s, 15m, 2h, 1d)")
+	fmt.Println("  --1h, --30m, --1d                          Duration flag aliases")
+	fmt.Println("  --yes, -y                                  Bypass public site exposure confirmation")
 	fmt.Println("\nManagement:")
-	fmt.Println("  status                      List active serve mounts and TTL countdowns")
-	fmt.Println("  off <name_or_port>          Remove an active serve mount")
-	fmt.Println("  reset                       Clear all serve mounts")
+	fmt.Println("  status                                     List active serve mounts and TTL countdowns")
+	fmt.Println("  logs [route_name]                          Stream live logs for background routes")
+	fmt.Println("  off [name_or_port]                         Remove active serve mount (interactive if no arg)")
+	fmt.Println("  reset                                      Clear all serve mounts")
+}
+
+func extractDurationFlags(args []string) ([]string, string) {
+	durations := map[string]string{
+		"-15m": "15m", "--15m": "15m",
+		"-30m": "30m", "--30m": "30m",
+		"-1h": "1h", "--1h": "1h",
+		"-2h": "2h", "--2h": "2h",
+		"-6h": "6h", "--6h": "6h",
+		"-12h": "12h", "--12h": "12h",
+		"-1d": "1d", "--1d": "1d",
+		"-7d": "7d", "--7d": "7d",
+	}
+	var out []string
+	var found string
+	for _, a := range args {
+		if d, ok := durations[a]; ok {
+			found = d
+		} else {
+			out = append(out, a)
+		}
+	}
+	return out, found
+}
+
+func checkBackendDial(target string) {
+	dialTarget := target
+	if !strings.Contains(dialTarget, ":") {
+		dialTarget = "127.0.0.1:" + dialTarget
+	}
+	conn, err := net.DialTimeout("tcp", dialTarget, 500*time.Millisecond)
+	if err != nil {
+		fmt.Printf("[WARNING] Nothing appears to be listening on %s (connection refused).\n", dialTarget)
+		fmt.Println("[INFO] Proxy route created anyway. Make sure your local application is started.")
+	} else {
+		conn.Close()
+	}
+}
+
+func getOutboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	if localAddr, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+		return localAddr.IP.String()
+	}
+	return ""
 }
 
 // RunServe handles 'gateway serve' subcommands.
@@ -252,41 +365,96 @@ func RunServe(args []string) {
 		os.Exit(0)
 	}
 
+	siteName, args := extractSiteFlag(args)
+	args, yesMode := extractBoolFlag(args, "y", "yes")
+	var durationPreset string
+	args, durationPreset = extractDurationFlags(args)
+
 	subcmd := args[0]
 	if subcmd == "--help" || subcmd == "-h" || subcmd == "help" {
 		PrintServeUsage()
 		os.Exit(0)
 	}
 
-	client := NewClient("", "", "")
+	client := NewClient(siteName)
 	ctx := context.Background()
+
+	if subcmd == "off" {
+		targetArg := ""
+		if len(args) >= 2 {
+			targetArg = args[1]
+		}
+		runServeOff(ctx, client, targetArg)
+		return
+	}
+
+	if subcmd == "logs" || subcmd == "log" {
+		targetRoute := ""
+		if len(args) >= 2 {
+			targetRoute = args[1]
+		}
+		logArgs := []string{}
+		if targetRoute != "" {
+			logArgs = append(logArgs, targetRoute)
+		}
+		if siteName != "" {
+			logArgs = append(logArgs, "--site", siteName)
+		}
+		RunLogs(logArgs)
+		return
+	}
 
 	switch subcmd {
 	case "dir", "static", "spa", "file":
-		runServeDir(ctx, client, args[1:], subcmd == "spa")
+		runArgs := args[1:]
+		if durationPreset != "" {
+			runArgs = append(runArgs, "--ttl", durationPreset)
+		}
+		runServeDir(ctx, client, runArgs, subcmd == "spa", yesMode)
+	case "redirect", "redir":
+		runArgs := args[1:]
+		if durationPreset != "" {
+			runArgs = append(runArgs, "--ttl", durationPreset)
+		}
+		runServeRedirect(ctx, client, runArgs, yesMode)
 	case "http":
-		runServeHTTP(ctx, client, args[1:])
+		runArgs := args[1:]
+		if durationPreset != "" {
+			runArgs = append(runArgs, "--ttl", durationPreset)
+		}
+		runServeHTTP(ctx, client, runArgs, yesMode)
 	case "https":
-		runServeHTTPS(ctx, client, args[1:])
+		runArgs := args[1:]
+		if durationPreset != "" {
+			runArgs = append(runArgs, "--ttl", durationPreset)
+		}
+		runServeHTTPS(ctx, client, runArgs, yesMode)
 	case "tcp":
-		runServeTCP(ctx, client, args[1:])
+		runArgs := args[1:]
+		if durationPreset != "" {
+			runArgs = append(runArgs, "--ttl", durationPreset)
+		}
+		runServeTCP(ctx, client, runArgs, yesMode)
 	case "udp":
-		runServeUDP(ctx, client, args[1:])
-	case "minecraft":
-		runServeMinecraft(ctx, client, args[1:])
+		runArgs := args[1:]
+		if durationPreset != "" {
+			runArgs = append(runArgs, "--ttl", durationPreset)
+		}
+		runServeUDP(ctx, client, runArgs, yesMode)
+	case "minecraft", "mc":
+		runArgs := args[1:]
+		if durationPreset != "" {
+			runArgs = append(runArgs, "--ttl", durationPreset)
+		}
+		runServeMinecraft(ctx, client, runArgs, yesMode)
 	case "status":
 		runServeStatus(ctx, client)
-	case "off":
-		if len(args) < 2 {
-			fmt.Println("Usage: gateway serve off <name_or_port>")
-			os.Exit(0)
-		}
-		runServeOff(ctx, client, args[1])
 	case "reset":
-		runServeReset(ctx, client)
+		runServeReset(ctx, client, yesMode)
 	default:
+		fmt.Fprintf(os.Stderr, "[ERROR] Unknown serve protocol or subcommand %q\n\n", subcmd)
 		PrintServeUsage()
-		os.Exit(0)
+		os.Exit(2)
 	}
 }
 
@@ -317,6 +485,33 @@ func ensureListener(ctx context.Context, client *Client, name, addr, proto strin
 	if err == nil {
 		for _, l := range listeners {
 			if l.Name == name || l.Address == addr {
+				if tls != nil {
+					needUpdate := false
+					var newDomains []string
+					if l.TLS != nil {
+						newDomains = append([]string{}, l.TLS.Domains...)
+					}
+					domainMap := make(map[string]bool)
+					for _, d := range newDomains {
+						domainMap[d] = true
+					}
+					for _, d := range tls.Domains {
+						if d != "" && !domainMap[d] {
+							domainMap[d] = true
+							newDomains = append(newDomains, d)
+							needUpdate = true
+						}
+					}
+					if l.TLS == nil || needUpdate {
+						updatedTLS := *tls
+						if len(newDomains) > 0 {
+							updatedTLS.Domains = newDomains
+						}
+						spec := l
+						spec.TLS = &updatedTLS
+						_ = client.CreateListener(ctx, spec)
+					}
+				}
 				return l.Name, nil
 			}
 		}
@@ -334,7 +529,7 @@ func ensureListener(ctx context.Context, client *Client, name, addr, proto strin
 	return name, nil
 }
 
-func runServeHTTP(ctx context.Context, client *Client, args []string) {
+func runServeHTTP(ctx context.Context, client *Client, args []string, yesMode bool) {
 	var watchMode bool
 	args, watchMode = extractWatchAndBGFlags(args)
 
@@ -348,8 +543,6 @@ func runServeHTTP(ctx context.Context, client *Client, args []string) {
 	rateLimit := fs.String("rate-limit", "", "Rate limit (rate/burst, e.g. 100/20)")
 	_ = fs.Bool("bg", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
 	_ = fs.Bool("d", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
-	_ = fs.Bool("watch", false, "Stream live logs in foreground and remove route on Ctrl+C (default)")
-	_ = fs.Bool("w", false, "Stream live logs in foreground and remove route on Ctrl+C (default)")
 
 	if hasHelpFlag(args) {
 		fmt.Println("Usage: gateway serve http <path> <target> [flags]")
@@ -365,6 +558,10 @@ func runServeHTTP(ctx context.Context, client *Client, args []string) {
 
 	mountArg := fs.Arg(0)
 	target := fs.Arg(1)
+
+	if !ConfirmPublicSiteExposure(client, yesMode, fmt.Sprintf("HTTP %s -> %s", mountArg, target)) {
+		return
+	}
 
 	domain, path := parseServeMount(mountArg)
 
@@ -468,17 +665,35 @@ func runServeHTTP(ctx context.Context, client *Client, args []string) {
 		Handler:  handlerSpec,
 	}
 
-	if err := client.CreateRoute(ctx, routeSpec); err != nil {
-		log.Fatalf("failed to create route: %v", err)
-	}
-
 	displayTarget := path
 	if domain != "" {
 		displayTarget = domain + path
 	}
-	fmt.Printf("Sharing HTTP %s -> %s (Listener: %s)\n", displayTarget, target, *listenAddr)
+
+	if hasMatchingServeRoute(ctx, client, actualListener, domain, path, target) {
+		fmt.Printf("[INFO] Serving HTTP %s -> %s (already active)\n", displayTarget, target)
+		return
+	}
+
+	if err := client.CreateRoute(ctx, routeSpec); err != nil {
+		log.Fatalf("failed to create route: %v", err)
+	}
+
+	checkBackendDial(target)
+
+	fmt.Printf("[INFO] Serving HTTP %s -> %s (Listener: %s, Mount: %s)\n", displayTarget, target, *listenAddr, routeName)
 	if ttlDuration > 0 {
-		fmt.Printf("TTL: %v (auto-expires)\n", ttlDuration)
+		fmt.Printf("[INFO] TTL: %v (auto-expires)\n", ttlDuration)
+	}
+
+	listenPort := strings.TrimPrefix(*listenAddr, ":")
+	portSuffix := ""
+	if listenPort != "80" {
+		portSuffix = ":" + listenPort
+	}
+	fmt.Printf("[INFO] Local URL:   http://localhost%s%s\n", portSuffix, path)
+	if localIP := getOutboundIP(); localIP != "" {
+		fmt.Printf("[INFO] Network URL: http://%s%s%s\n", localIP, portSuffix, path)
 	}
 
 	if watchMode {
@@ -486,7 +701,7 @@ func runServeHTTP(ctx context.Context, client *Client, args []string) {
 	}
 }
 
-func runServeHTTPS(ctx context.Context, client *Client, args []string) {
+func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode bool) {
 	var watchMode bool
 	args, watchMode = extractWatchAndBGFlags(args)
 
@@ -503,8 +718,6 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string) {
 	noRedirect := fs.Bool("no-redirect", false, "Do not automatically create HTTP to HTTPS redirect route on port 80")
 	_ = fs.Bool("bg", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
 	_ = fs.Bool("d", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
-	_ = fs.Bool("watch", false, "Stream live logs in foreground and remove route on Ctrl+C (default)")
-	_ = fs.Bool("w", false, "Stream live logs in foreground and remove route on Ctrl+C (default)")
 
 	if hasHelpFlag(args) {
 		fmt.Println("Usage: gateway serve https <path> <target> [flags]")
@@ -520,6 +733,10 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string) {
 
 	mountArg := fs.Arg(0)
 	target := fs.Arg(1)
+
+	if !ConfirmPublicSiteExposure(client, yesMode, fmt.Sprintf("HTTPS %s -> %s", mountArg, target)) {
+		return
+	}
 
 	parsedDomain, path := parseServeMount(mountArg)
 	domainVal := *domain
@@ -621,15 +838,29 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string) {
 		Handler:  handlerSpec,
 	}
 
-	if err := client.CreateRoute(ctx, routeSpec); err != nil {
-		log.Fatalf("failed to create HTTPS route: %v", err)
-	}
-
 	displayTarget := path
 	if domainVal != "" {
 		displayTarget = domainVal + path
 	}
-	fmt.Printf("Sharing HTTPS %s -> %s (Listener: %s)\n", displayTarget, target, *listenAddr)
+
+	if hasMatchingServeRoute(ctx, client, actualListener, domainVal, path, target) {
+		fmt.Printf("[INFO] Serving HTTPS %s -> %s (already active)\n", displayTarget, target)
+		return
+	}
+
+	if err := client.CreateRoute(ctx, routeSpec); err != nil {
+		log.Fatalf("failed to create HTTPS route: %v", err)
+	}
+
+	checkBackendDial(target)
+
+	fmt.Printf("[INFO] Serving HTTPS %s -> %s (Listener: %s, Mount: %s)\n", displayTarget, target, *listenAddr, routeName)
+	if ttlDuration > 0 {
+		fmt.Printf("[INFO] TTL: %v (auto-expires)\n", ttlDuration)
+	}
+	if domainVal != "" {
+		fmt.Printf("[INFO] Public URL:  https://%s%s\n", domainVal, path)
+	}
 
 	routesToCleanup := []string{routeName}
 
@@ -681,7 +912,7 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string) {
 	}
 }
 
-func runServeTCP(ctx context.Context, client *Client, args []string) {
+func runServeTCP(ctx context.Context, client *Client, args []string, yesMode bool) {
 	var watchMode bool
 	args, watchMode = extractWatchAndBGFlags(args)
 
@@ -689,8 +920,6 @@ func runServeTCP(ctx context.Context, client *Client, args []string) {
 	ttlStr := fs.String("ttl", "", "Time to live duration")
 	_ = fs.Bool("bg", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
 	_ = fs.Bool("d", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
-	_ = fs.Bool("watch", false, "Stream live logs and remove route on Ctrl+C (default)")
-	_ = fs.Bool("w", false, "Stream live logs and remove route on Ctrl+C (default)")
 
 	if hasHelpFlag(args) {
 		fmt.Println("Usage: gateway serve tcp <listen-port> <target> [flags]")
@@ -706,6 +935,10 @@ func runServeTCP(ctx context.Context, client *Client, args []string) {
 
 	listenPort := fs.Arg(0)
 	target := fs.Arg(1)
+
+	if !ConfirmPublicSiteExposure(client, yesMode, fmt.Sprintf("TCP %s -> %s", listenPort, target)) {
+		return
+	}
 
 	listenAddr := ":" + listenPort
 	if strings.Contains(listenPort, ":") {
@@ -744,14 +977,14 @@ func runServeTCP(ctx context.Context, client *Client, args []string) {
 		log.Fatalf("failed to create TCP route: %v", err)
 	}
 
-	fmt.Printf("Sharing TCP %s -> %s\n", listenAddr, target)
+	fmt.Printf("Sharing TCP %s -> %s (Listener: %s, Mount: %s)\n", listenAddr, target, listenAddr, routeName)
 
 	if watchMode {
 		WatchAndCleanup(client, routeName)
 	}
 }
 
-func runServeUDP(ctx context.Context, client *Client, args []string) {
+func runServeUDP(ctx context.Context, client *Client, args []string, yesMode bool) {
 	var watchMode bool
 	args, watchMode = extractWatchAndBGFlags(args)
 
@@ -759,8 +992,6 @@ func runServeUDP(ctx context.Context, client *Client, args []string) {
 	ttlStr := fs.String("ttl", "", "Time to live duration")
 	_ = fs.Bool("bg", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
 	_ = fs.Bool("d", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
-	_ = fs.Bool("watch", false, "Stream live logs and remove route on Ctrl+C (default)")
-	_ = fs.Bool("w", false, "Stream live logs and remove route on Ctrl+C (default)")
 
 	if hasHelpFlag(args) {
 		fmt.Println("Usage: gateway serve udp <listen-port> <target> [flags]")
@@ -776,6 +1007,10 @@ func runServeUDP(ctx context.Context, client *Client, args []string) {
 
 	listenPort := fs.Arg(0)
 	target := fs.Arg(1)
+
+	if !ConfirmPublicSiteExposure(client, yesMode, fmt.Sprintf("UDP %s -> %s", listenPort, target)) {
+		return
+	}
 
 	listenAddr := ":" + listenPort
 	if strings.Contains(listenPort, ":") {
@@ -814,7 +1049,7 @@ func runServeUDP(ctx context.Context, client *Client, args []string) {
 		log.Fatalf("failed to create UDP route: %v", err)
 	}
 
-	fmt.Printf("Sharing UDP %s -> %s\n", listenAddr, target)
+	fmt.Printf("Sharing UDP %s -> %s (Listener: %s, Mount: %s)\n", listenAddr, target, listenAddr, routeName)
 
 	if watchMode {
 		WatchAndCleanup(client, routeName)
@@ -827,7 +1062,7 @@ func isNumericPort(s string) bool {
 	return err == nil
 }
 
-func runServeMinecraft(ctx context.Context, client *Client, args []string) {
+func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMode bool) {
 	var watchMode bool
 	args, watchMode = extractWatchAndBGFlags(args)
 
@@ -838,8 +1073,6 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string) {
 	denyPlayers := fs.String("deny-player", "", "Blacklisted Minecraft player usernames (comma-separated)")
 	_ = fs.Bool("bg", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
 	_ = fs.Bool("d", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
-	_ = fs.Bool("watch", false, "Stream live logs and remove route on Ctrl+C (default)")
-	_ = fs.Bool("w", false, "Stream live logs and remove route on Ctrl+C (default)")
 
 	if hasHelpFlag(args) {
 		fmt.Println("Usage: gateway serve minecraft <host-or-port> [target] [flags]")
@@ -857,6 +1090,10 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string) {
 	arg1 := ""
 	if fs.NArg() >= 2 {
 		arg1 = fs.Arg(1)
+	}
+
+	if !ConfirmPublicSiteExposure(client, yesMode, fmt.Sprintf("Minecraft service %s", arg0)) {
+		return
 	}
 
 	parsedDomain, _ := parseServeMount(arg0)
@@ -946,7 +1183,7 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string) {
 	if displayHost == "" {
 		displayHost = listenAddr
 	}
-	fmt.Printf("Sharing Minecraft %s -> %s (Listener: %s)\n", displayHost, target, listenAddr)
+	fmt.Printf("Sharing Minecraft %s -> %s (Listener: %s, Mount: %s)\n", displayHost, target, listenAddr, routeName)
 
 	if watchMode {
 		WatchAndCleanup(client, routeName)
@@ -956,7 +1193,8 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string) {
 func runServeStatus(ctx context.Context, client *Client) {
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
-		log.Fatalf("failed to retrieve serve status: %v", err)
+		fmt.Fprintf(os.Stderr, "[ERROR] Failed to retrieve serve status: %v\n", err)
+		os.Exit(1)
 	}
 
 	var serveRoutes []api.RouteSpec
@@ -972,12 +1210,11 @@ func runServeStatus(ctx context.Context, client *Client) {
 		return
 	}
 
-	fmt.Printf("%-22s %-12s %-8s %-25s %-20s %-12s\n", "NAME", "LISTENER", "PROTO", "MATCH", "TARGET", "EXPIRES IN")
-	fmt.Println("---------------------------------------------------------------------------------------------------")
+	tbl := NewTable("NAME", "LISTENER", "PROTO", "MATCH", "TARGET", "EXPIRES IN")
 	for _, r := range serveRoutes {
-		fmt.Printf("%-22s %-12s %-8s %-25s %-20s %-12s\n",
-			r.Name, r.Listener, r.Protocol, FormatRuleSummary(r.Rule), FormatTargetsSummary(r.Handler), FormatTTLRemaining(time.Now(), r.TTL))
+		tbl.AddRow(r.Name, r.Listener, r.Protocol, FormatRuleSummary(r.Rule), FormatTargetsSummary(r.Handler), FormatTTLRemaining(time.Now(), r.TTL))
 	}
+	fmt.Print(tbl.String())
 }
 
 func runServeOff(ctx context.Context, client *Client, nameOrPort string) {
@@ -986,11 +1223,36 @@ func runServeOff(ctx context.Context, client *Client, nameOrPort string) {
 		log.Fatalf("failed to retrieve routes: %v", err)
 	}
 
+	if nameOrPort == "" {
+		var serveRoutes []api.RouteSpec
+		for _, r := range routes {
+			if strings.HasPrefix(r.Name, "serve-") {
+				serveRoutes = append(serveRoutes, r)
+			}
+		}
+		if len(serveRoutes) == 0 {
+			fmt.Println("[INFO] No active serve mounts found.")
+			return
+		}
+		fmt.Println("\nSelect an active serve mount to turn off:")
+		for i, r := range serveRoutes {
+			fmt.Printf("  %d) %-22s (%s -> %s)\n", i+1, r.Name, r.Protocol, FormatTargetsSummary(r.Handler))
+		}
+		input := PromptInput("\nEnter number (or 0 to cancel): ")
+		var choice int
+		if _, err := fmt.Sscanf(input, "%d", &choice); err == nil && choice > 0 && choice <= len(serveRoutes) {
+			nameOrPort = serveRoutes[choice-1].Name
+		} else {
+			fmt.Println("[INFO] Operation cancelled.")
+			return
+		}
+	}
+
 	deletedCount := 0
 	for _, r := range routes {
 		if r.Name == nameOrPort || strings.Contains(r.Name, nameOrPort) || strings.HasSuffix(r.Listener, "-"+nameOrPort) {
 			if err := client.DeleteRoute(ctx, r.Name); err == nil {
-				fmt.Printf("Removed serve mount %q\n", r.Name)
+				fmt.Printf("[SUCCESS] Removed serve mount %q\n", r.Name)
 				deletedCount++
 			}
 		}
@@ -999,10 +1261,10 @@ func runServeOff(ctx context.Context, client *Client, nameOrPort string) {
 	if deletedCount == 0 {
 		// Try direct delete by name
 		if err := client.DeleteRoute(ctx, nameOrPort); err == nil {
-			fmt.Printf("Removed serve mount %q\n", nameOrPort)
+			fmt.Printf("[SUCCESS] Removed serve mount %q\n", nameOrPort)
 			deletedCount++
 		} else {
-			fmt.Printf("No active serve mount found matching %q\n", nameOrPort)
+			fmt.Printf("[INFO] No active serve mount found matching %q\n", nameOrPort)
 		}
 	}
 
@@ -1011,25 +1273,44 @@ func runServeOff(ctx context.Context, client *Client, nameOrPort string) {
 	}
 }
 
-func runServeReset(ctx context.Context, client *Client) {
+func runServeReset(ctx context.Context, client *Client, yesMode bool) {
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
 		log.Fatalf("failed to retrieve routes: %v", err)
 	}
 
-	deletedCount := 0
+	var serveRoutes []string
 	for _, r := range routes {
 		if strings.HasPrefix(r.Name, "serve-") {
-			if err := client.DeleteRoute(ctx, r.Name); err == nil {
-				deletedCount++
-			}
+			serveRoutes = append(serveRoutes, r.Name)
+		}
+	}
+
+	if len(serveRoutes) == 0 {
+		fmt.Println("No active serve mounts to remove.")
+		return
+	}
+
+	if !yesMode {
+		fmt.Printf("This will remove %d serve mount(s). Continue? [y/N]: ", len(serveRoutes))
+		input := strings.ToLower(PromptInput(""))
+		if input != "y" && input != "yes" {
+			fmt.Println("[INFO] Operation cancelled.")
+			return
+		}
+	}
+
+	deletedCount := 0
+	for _, name := range serveRoutes {
+		if err := client.DeleteRoute(ctx, name); err == nil {
+			deletedCount++
 		}
 	}
 	cleanupUnusedServeListeners(ctx, client)
-	fmt.Printf("Reset complete. Removed %d serve mounts.\n", deletedCount)
+	fmt.Printf("Reset complete. Removed %d serve mount(s).\n", deletedCount)
 }
 
-func runServeDir(ctx context.Context, client *Client, args []string, defaultSPA bool) {
+func runServeDir(ctx context.Context, client *Client, args []string, defaultSPA bool, yesMode bool) {
 	var watchMode bool
 	args, watchMode = extractWatchAndBGFlags(args)
 
@@ -1051,8 +1332,6 @@ func runServeDir(ctx context.Context, client *Client, args []string, defaultSPA 
 	noRedirect := fs.Bool("no-redirect", false, "Do not automatically create HTTP to HTTPS redirect route on port 80")
 	_ = fs.Bool("bg", false, "Run in background mode")
 	_ = fs.Bool("d", false, "Run in background mode")
-	_ = fs.Bool("watch", false, "Stream live logs in foreground and remove route on Ctrl+C (default)")
-	_ = fs.Bool("w", false, "Stream live logs in foreground and remove route on Ctrl+C (default)")
 
 	if hasHelpFlag(args) {
 		fmt.Println("Usage: gateway serve dir <domain/path> <local-dir> [flags]")
@@ -1070,6 +1349,10 @@ func runServeDir(ctx context.Context, client *Client, args []string, defaultSPA 
 	dirPath := "."
 	if fs.NArg() >= 2 {
 		dirPath = fs.Arg(1)
+	}
+
+	if !ConfirmPublicSiteExposure(client, yesMode, fmt.Sprintf("Static Directory %s -> %s", mountArg, dirPath)) {
+		return
 	}
 
 	isHTTPS := true
@@ -1210,7 +1493,7 @@ func runServeDir(ctx context.Context, client *Client, args []string, defaultSPA 
 		} else if *spa {
 			modeStr = "SPA"
 		}
-		fmt.Printf("Sharing %s HTTPS %s -> %s (Listener: %s)\n", modeStr, displayTarget, absDir, lAddr)
+		fmt.Printf("Sharing %s HTTPS %s -> %s (Listener: %s, Mount: %s)\n", modeStr, displayTarget, absDir, lAddr, routeName)
 
 		routesToCleanup := []string{routeName}
 
@@ -1319,10 +1602,167 @@ func runServeDir(ctx context.Context, client *Client, args []string, defaultSPA 
 		} else if *spa {
 			modeStr = "SPA"
 		}
-		fmt.Printf("Sharing %s HTTP %s -> %s (Listener: %s)\n", modeStr, displayTarget, absDir, lAddr)
+		fmt.Printf("Sharing %s HTTP %s -> %s (Listener: %s, Mount: %s)\n", modeStr, displayTarget, absDir, lAddr, routeName)
 
 		if watchMode {
 			WatchAndCleanup(client, routeName)
 		}
+	}
+}
+
+func runServeRedirect(ctx context.Context, client *Client, args []string, yesMode bool) {
+	var watchMode bool
+	args, watchMode = extractWatchAndBGFlags(args)
+
+	fs := flag.NewFlagSet("serve redirect", flag.ExitOnError)
+	ttlStr := fs.String("ttl", "", "Time to live duration")
+	statusCode := fs.Int("code", 301, "HTTP status code for redirect (301 or 302)")
+	_ = fs.Bool("bg", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
+	_ = fs.Bool("d", false, "Run in background and keep route active after CLI exits (default is foreground watch mode)")
+
+	if hasHelpFlag(args) {
+		fmt.Println("Usage: gateway serve redirect <domain/path> <target-url> [flags]")
+		fs.PrintDefaults()
+		os.Exit(0)
+	}
+
+	_ = fs.Parse(args)
+	if fs.NArg() < 2 {
+		fmt.Println("Usage: gateway serve redirect <domain/path> <target-url> [flags]")
+		os.Exit(2)
+	}
+
+	mountArg := fs.Arg(0)
+	targetURL := fs.Arg(1)
+
+	if !ConfirmPublicSiteExposure(client, yesMode, fmt.Sprintf("Redirect %s -> %s", mountArg, targetURL)) {
+		return
+	}
+
+	domain, path := parseServeMount(mountArg)
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		targetURL = "https://" + targetURL
+	}
+
+	ttlDuration, err := ParseTTL(*ttlStr)
+	if err != nil {
+		log.Fatalf("invalid ttl: %v", err)
+	}
+
+	status := *statusCode
+	if status != 301 && status != 302 {
+		status = 301
+	}
+
+	displaySource := path
+	if domain != "" {
+		displaySource = domain + path
+	}
+
+	var routesToCleanup []string
+
+	// 1. HTTPS listener & route (port 443)
+	tlsSpec := &api.TLSConfigSpec{
+		Auto: true,
+	}
+	if domain != "" {
+		tlsSpec.Domains = []string{domain}
+	}
+
+	httpsListener, err := ensureListener(ctx, client, "serve-https-443", ":443", "tcp", tlsSpec)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Could not create HTTPS listener on :443: %v\n", err)
+	} else {
+		if hasMatchingServeRoute(ctx, client, httpsListener, domain, path, targetURL) {
+			fmt.Printf("[INFO] Redirecting HTTPS https://%s -> %s (Code: %d, already active)\n", displaySource, targetURL, status)
+		} else {
+			httpsRouteName := fmt.Sprintf("serve-redirect-https-%d", time.Now().UnixNano()%10000)
+			var rules []api.RuleSpec
+			rules = append(rules, api.RuleSpec{Type: "secure"})
+			if domain != "" {
+				rules = append(rules, api.RuleSpec{Type: "host", Value: domain})
+			}
+			if path != "/" && path != "" {
+				rules = append(rules, api.RuleSpec{Type: "path_prefix", Value: path})
+			}
+
+			ruleSpec := rules[0]
+			if len(rules) > 1 {
+				ruleSpec = api.RuleSpec{Type: "and", Rules: rules}
+			}
+
+			httpsRoute := api.RouteSpec{
+				Name:     httpsRouteName,
+				Protocol: "http",
+				Listener: httpsListener,
+				Priority: 1,
+				TTL:      int(ttlDuration.Seconds()),
+				Rule:     ruleSpec,
+				Handler: api.HandlerSpec{
+					Type:   "http_redirect",
+					Config: map[string]any{"url": targetURL, "status": float64(status)},
+				},
+			}
+
+			if err := client.CreateRoute(ctx, httpsRoute); err != nil {
+				fmt.Fprintf(os.Stderr, "[ERROR] Could not create HTTPS redirect route: %v\n", err)
+			} else {
+				routesToCleanup = append(routesToCleanup, httpsRouteName)
+				fmt.Printf("[INFO] Redirecting HTTPS https://%s -> %s (Code: %d, Mount: %s)\n", displaySource, targetURL, status, httpsRouteName)
+			}
+		}
+	}
+
+	// 2. HTTP listener & route (port 80)
+	httpListener, err := ensureListener(ctx, client, "serve-http-80", ":80", "tcp", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] Could not create HTTP listener on :80: %v\n", err)
+	} else {
+		if hasMatchingServeRoute(ctx, client, httpListener, domain, path, targetURL) {
+			fmt.Printf("[INFO] Redirecting HTTP  http://%s -> %s (Code: %d, already active)\n", displaySource, targetURL, status)
+		} else {
+			httpRouteName := fmt.Sprintf("serve-redirect-http-%d", time.Now().UnixNano()%10000)
+			var rules []api.RuleSpec
+			rules = append(rules, api.RuleSpec{Type: "not", Rule: &api.RuleSpec{Type: "secure"}})
+			if domain != "" {
+				rules = append(rules, api.RuleSpec{Type: "host", Value: domain})
+			}
+			if path != "/" && path != "" {
+				rules = append(rules, api.RuleSpec{Type: "path_prefix", Value: path})
+			}
+
+			ruleSpec := rules[0]
+			if len(rules) > 1 {
+				ruleSpec = api.RuleSpec{Type: "and", Rules: rules}
+			}
+
+			httpRoute := api.RouteSpec{
+				Name:     httpRouteName,
+				Protocol: "http",
+				Listener: httpListener,
+				Priority: 1,
+				TTL:      int(ttlDuration.Seconds()),
+				Rule:     ruleSpec,
+				Handler: api.HandlerSpec{
+					Type:   "http_redirect",
+					Config: map[string]any{"url": targetURL, "status": float64(status)},
+				},
+			}
+
+			if err := client.CreateRoute(ctx, httpRoute); err != nil {
+				fmt.Fprintf(os.Stderr, "[ERROR] Could not create HTTP redirect route: %v\n", err)
+			} else {
+				routesToCleanup = append(routesToCleanup, httpRouteName)
+				fmt.Printf("[INFO] Redirecting HTTP  http://%s -> %s (Code: %d, Mount: %s)\n", displaySource, targetURL, status, httpRouteName)
+			}
+		}
+	}
+
+	if ttlDuration > 0 {
+		fmt.Printf("[INFO] TTL: %v (auto-expires)\n", ttlDuration)
+	}
+
+	if watchMode && len(routesToCleanup) > 0 {
+		WatchAndCleanup(client, routesToCleanup...)
 	}
 }

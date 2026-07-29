@@ -45,7 +45,7 @@ func TestClientAPIAndFallback(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	client := NewClient(server.URL, "test-token", dbPath)
+	client := newClientDirect(server.URL, "test-token", dbPath)
 
 	// Test Health
 	health, err := client.Health(ctx)
@@ -78,7 +78,7 @@ func TestClientAPIAndFallback(t *testing.T) {
 	}
 
 	// 2. Test Offline SQLite Fallback
-	offlineClient := NewClient("http://127.0.0.1:59999", "", dbPath) // Unreachable port
+	offlineClient := newClientDirect("http://127.0.0.1:59999", "", dbPath) // Unreachable port
 
 	// Create listener directly in DB
 	err = offlineClient.CreateListener(ctx, api.ListenerSpec{Name: "offline-ln", Address: ":9090", Protocol: "tcp"})
@@ -99,6 +99,18 @@ func TestClientAPIAndFallback(t *testing.T) {
 	err = offlineClient.DeleteListener(ctx, "offline-ln")
 	if err != nil {
 		t.Fatalf("offline DeleteListener failed: %v", err)
+	}
+}
+
+func TestResolveSiteName(t *testing.T) {
+	client := NewClient("production")
+	if client.SiteName != "production" {
+		t.Errorf("expected SiteName production, got %q", client.SiteName)
+	}
+
+	defaultClient := NewClient("")
+	if defaultClient.SiteName == "" {
+		t.Errorf("expected non-empty SiteName for default client")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"runtime"
 	"strings"
@@ -28,6 +29,7 @@ type API struct {
 	gw             *gateway.Gateway
 	db             *sql.DB
 	fw             firewall.Manager
+	public         bool
 	startTime      time.Time
 	mu             sync.RWMutex
 	listeners      map[string]ListenerSpec
@@ -37,7 +39,9 @@ type API struct {
 }
 
 // New creates and initializes an API instance, rehydrating listeners and routes from the database.
-func New(gw *gateway.Gateway, db *sql.DB, fw firewall.Manager) (*API, error) {
+// isPublic indicates whether this daemon is exposed to the open Internet; the value is
+// sourced from ~/.config/gateway/server.yaml or the GATEWAY_PUBLIC env var.
+func New(gw *gateway.Gateway, db *sql.DB, fw firewall.Manager, isPublic bool) (*API, error) {
 	if gw == nil {
 		return nil, errors.New("gateway instance cannot be nil")
 	}
@@ -52,6 +56,7 @@ func New(gw *gateway.Gateway, db *sql.DB, fw firewall.Manager) (*API, error) {
 		gw:             gw,
 		db:             db,
 		fw:             fw,
+		public:         isPublic,
 		startTime:      time.Now(),
 		listeners:      make(map[string]ListenerSpec),
 		routes:         make(map[string]routeEntry),
@@ -107,11 +112,20 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 			Domains: spec.Domains,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize ACME auto-cert manager: %w", err)
-		}
-		if acmeMgr.HasDNSProvider() {
+			hasPublicDomain := false
 			for _, d := range spec.Domains {
-				if d != "" && d != "localhost" && strings.Contains(d, ".") {
+				dStr := strings.ToLower(strings.TrimSpace(d))
+				if dStr != "" && dStr != "localhost" && !strings.HasSuffix(dStr, ".localhost") && !strings.HasSuffix(dStr, ".local") && net.ParseIP(dStr) == nil {
+					hasPublicDomain = true
+					break
+				}
+			}
+			if hasPublicDomain {
+				return nil, fmt.Errorf("failed to initialize ACME auto-cert manager: %w", err)
+			}
+		} else if acmeMgr != nil && acmeMgr.HasDNSProvider() {
+			for _, d := range spec.Domains {
+				if d != "" && d != "localhost" && !strings.HasSuffix(d, ".localhost") && strings.Contains(d, ".") {
 					_, _ = acmeMgr.ObtainWildcardCertificate(d)
 				}
 			}
@@ -137,7 +151,7 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 		}
 	}
 
-	// Default fallback: Generate self-signed cert for local dev HTTPS
+	// Default fallback: Generate self-signed cert for local dev HTTPS (.localhost, localhost, or when ACME email is unset)
 	if devCert != nil {
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{*devCert},
@@ -392,6 +406,7 @@ func (a *API) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]any{
 		"status":          "ok",
+		"public":          a.public,
 		"uptime_seconds":  int(time.Since(a.startTime).Seconds()),
 		"goroutines":      runtime.NumGoroutine(),
 		"alloc_bytes":     memStats.Alloc,

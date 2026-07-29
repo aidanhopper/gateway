@@ -193,7 +193,7 @@ func setupServeMockServer(t *testing.T) (*httptest.Server, *Client) {
 	})
 
 	server := httptest.NewServer(handler)
-	client := NewClient(server.URL, "test-token", "")
+	client := newClientDirect(server.URL, "test-token", "")
 	return server, client
 }
 
@@ -293,7 +293,7 @@ func TestRunServeOffAndReset(t *testing.T) {
 	}
 
 	// Reset remaining serve mounts
-	runServeReset(ctx, client)
+	runServeReset(ctx, client, true)
 
 	routes, _ = client.ListRoutes(ctx)
 	if len(routes) != 0 {
@@ -348,7 +348,7 @@ func TestServeHTTPAutoStripPrefix(t *testing.T) {
 	ctx := context.Background()
 
 	// Run serve http with path /abc in background mode for unit test
-	runServeHTTP(ctx, client, []string{"/abc", "3000", "--bg"})
+	runServeHTTP(ctx, client, []string{"/abc", "3000", "--bg"}, true)
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -431,7 +431,7 @@ func TestServeHTTPSAutoRedirect(t *testing.T) {
 	ctx := context.Background()
 
 	// Run serve https with domain and path in background mode
-	runServeHTTPS(ctx, client, []string{"abc.localhost/mypath", "8096", "--bg"})
+	runServeHTTPS(ctx, client, []string{"abc.localhost/mypath", "8096", "--bg"}, true)
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -472,7 +472,7 @@ func TestServeMinecraftPositionalArgs(t *testing.T) {
 	ctx := context.Background()
 
 	// Run serve minecraft abc.localhost docker-server:25565 --bg
-	runServeMinecraft(ctx, client, []string{"abc.localhost", "docker-server:25565", "--bg"})
+	runServeMinecraft(ctx, client, []string{"abc.localhost", "docker-server:25565", "--bg"}, true)
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -516,7 +516,7 @@ func TestServeDirCommand(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(tmpDir, "index.html"), []byte("<h1>SPA APP</h1>"), 0644)
 
 	// Default HTTPS mode creates HTTPS static route + HTTP 301 redirect route
-	runServeDir(ctx, client, []string{"app.domain.com/", tmpDir, "--spa", "--bg"}, true)
+	runServeDir(ctx, client, []string{"app.domain.com/", tmpDir, "--spa", "--bg"}, true, true)
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -562,7 +562,7 @@ func TestServeSingleFileCommand(t *testing.T) {
 	_ = tmpFile.Close()
 
 	// Run serve file what.localhost/install.sh ./script.sh --http --bg
-	runServeDir(ctx, client, []string{"--http", "--bg", "what.localhost/install.sh", tmpFile.Name()}, false)
+	runServeDir(ctx, client, []string{"--http", "--bg", "what.localhost/install.sh", tmpFile.Name()}, false, true)
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -592,7 +592,7 @@ func TestServeSingleFileHTTPRedirectIntegration(t *testing.T) {
 	_ = tmpFile.Close()
 
 	// Run serve dir what.localhost/install.sh ./script.sh --bg (HTTPS default mode)
-	runServeDir(ctx, client, []string{"--bg", "what.localhost/install.sh", tmpFile.Name()}, false)
+	runServeDir(ctx, client, []string{"--bg", "what.localhost/install.sh", tmpFile.Name()}, false, true)
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -639,4 +639,84 @@ func TestServeSingleFileHTTPRedirectIntegration(t *testing.T) {
 	if !hasPathMatch {
 		t.Errorf("expected exact path rule '/install.sh' in static route, got %+v", staticRoute.Rule.Rules)
 	}
+}
+
+func TestExtractDurationFlags(t *testing.T) {
+	tests := []struct {
+		name             string
+		args             []string
+		expectedArgs     []string
+		expectedDuration string
+	}{
+		{
+			name:             "1h flag alias",
+			args:             []string{"3000", "--1h"},
+			expectedArgs:     []string{"3000"},
+			expectedDuration: "1h",
+		},
+		{
+			name:             "30m flag alias",
+			args:             []string{"http", "/", "8080", "-30m"},
+			expectedArgs:     []string{"http", "/", "8080"},
+			expectedDuration: "30m",
+		},
+		{
+			name:             "No duration flag",
+			args:             []string{"3000"},
+			expectedArgs:     []string{"3000"},
+			expectedDuration: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotArgs, gotDur := extractDurationFlags(tt.args)
+			if gotDur != tt.expectedDuration {
+				t.Errorf("extractDurationFlags() duration = %q, expected %q", gotDur, tt.expectedDuration)
+			}
+			if len(gotArgs) != len(tt.expectedArgs) {
+				t.Fatalf("extractDurationFlags() args length = %d, expected %d", len(gotArgs), len(tt.expectedArgs))
+			}
+			for i, arg := range gotArgs {
+				if arg != tt.expectedArgs[i] {
+					t.Errorf("args[%d] = %q, expected %q", i, arg, tt.expectedArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestServeRedirectCommand(t *testing.T) {
+	server, client := setupServeMockServer(t)
+	defer server.Close()
+	ctx := context.Background()
+
+	// Run serve redirect docs.domain.com/ https://github.com/my-org/docs --bg
+	runServeRedirect(ctx, client, []string{"--bg", "docs.domain.com/", "https://github.com/my-org/docs"}, true)
+
+	// Run exact same serve command again to verify deduplication prevents duplicate routes
+	runServeRedirect(ctx, client, []string{"--bg", "docs.domain.com/", "https://github.com/my-org/docs"}, true)
+
+	routes, err := client.ListRoutes(ctx)
+	if err != nil {
+		t.Fatalf("ListRoutes failed: %v", err)
+	}
+	if len(routes) != 2 {
+		t.Fatalf("expected 2 redirect routes (HTTP + HTTPS) after deduplication, got %d", len(routes))
+	}
+
+	for _, r := range routes {
+		if r.Handler.Type != "http_redirect" {
+			t.Errorf("expected handler type http_redirect, got %s", r.Handler.Type)
+		}
+		targetURL, _ := r.Handler.Config["url"].(string)
+		if targetURL != "https://github.com/my-org/docs" {
+			t.Errorf("expected target URL https://github.com/my-org/docs, got %q", targetURL)
+		}
+	}
+}
+
+func TestRunLogsCommand(t *testing.T) {
+	// Verify RunLogs --help works
+	RunLogs([]string{"--help"})
 }
