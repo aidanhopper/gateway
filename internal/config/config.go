@@ -44,12 +44,10 @@ func (s *StringOrList) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type ServerConfig struct {
-	Addr           string       `yaml:"addr"`
-	DB             string       `yaml:"db"`
-	Database       string       `yaml:"database"`
-	Firewall       string       `yaml:"firewall"`
-	ProtectedPorts StringOrList `yaml:"protected_ports"`
-	Public         bool         `yaml:"public"`
+	Addr     string `yaml:"addr"`
+	DB       string `yaml:"db"`
+	Database string `yaml:"database"`
+	Public   bool   `yaml:"public"`
 
 	APISection struct {
 		Listen string `yaml:"listen"`
@@ -63,6 +61,10 @@ type ServerConfig struct {
 	LogSection struct {
 		Level string `yaml:"level"`
 	} `yaml:"log"`
+
+	// Resolved flat values used by daemon
+	Firewall       string       `yaml:"-"`
+	ProtectedPorts StringOrList `yaml:"-"`
 }
 
 func parseServerConfigData(data []byte) (*ServerConfig, error) {
