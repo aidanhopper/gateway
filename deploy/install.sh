@@ -87,7 +87,7 @@ fi
 # Create Client Configuration Directory
 USER_CONFIG_DIR="${HOME:-/root}/.config/gateway"
 mkdir -p "$USER_CONFIG_DIR"
-if [ ! -f "$USER_CONFIG_DIR/config.yaml" ]; then
+if [ ! -f "$USER_CONFIG_DIR/config.yaml" ] && [ ! -f "$USER_CONFIG_DIR/config.yml" ]; then
     cat <<EOF > "$USER_CONFIG_DIR/config.yaml"
 # Gateway Client Configuration
 active_site: "default"
@@ -97,7 +97,7 @@ sites:
 EOF
     echo -e "${GREEN}[SUCCESS] Created client config at $USER_CONFIG_DIR/config.yaml${NC}"
 else
-    echo -e "${CYAN}[INFO] Preserved existing client config at $USER_CONFIG_DIR/config.yaml${NC}"
+    echo -e "${CYAN}[INFO] Preserved existing client config in $USER_CONFIG_DIR${NC}"
 fi
 
 # If Client-only mode, stop here!

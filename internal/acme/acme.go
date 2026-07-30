@@ -106,7 +106,7 @@ func NewManager(cfg Config) (*Manager, error) {
 		email = strings.TrimSpace(os.Getenv("GATEWAY_ACME_EMAIL"))
 	}
 	if email == "" {
-		return nil, errors.New("ACME auto-cert requires an email (set GATEWAY_ACME_EMAIL or specify email)")
+		return nil, errors.New("ACME auto-cert requires an email (set email in /etc/gateway/server.yaml or GATEWAY_ACME_EMAIL)")
 	}
 
 	cacheDir := strings.TrimSpace(cfg.CacheDir)

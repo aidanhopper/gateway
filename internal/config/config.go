@@ -314,6 +314,18 @@ func WriteActiveSite(name string) error {
 	return os.WriteFile(activeSitePath(), []byte(name+"\n"), 0644)
 }
 
+// ClientConfigPath returns the path to the client configuration file (config.yaml or config.yml).
+func ClientConfigPath() string {
+	dir := ConfigDir()
+	for _, name := range []string{"config.yaml", "config.yml"} {
+		p := filepath.Join(dir, name)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return filepath.Join(dir, "config.yaml")
+}
+
 // ResolveSite returns the SiteProfile to use, applying the priority order:
 //  1. nameOverride (from --site flag or GATEWAY_SITE env var) -> config lookup.
 //  2. GATEWAY_API_URL + GATEWAY_API_TOKEN env vars (CI/CD mode, no config needed).
@@ -328,7 +340,7 @@ func ResolveSite(cfg *Config, nameOverride string) (SiteProfile, error) {
 	if name != "" {
 		profile, ok := cfg.Sites[name]
 		if !ok {
-			return SiteProfile{}, fmt.Errorf("site %q not found in ~/.config/gateway/config.yaml", name)
+			return SiteProfile{}, fmt.Errorf("site %q not found in %s", name, ClientConfigPath())
 		}
 		return profile, nil
 	}
@@ -346,7 +358,7 @@ func ResolveSite(cfg *Config, nameOverride string) (SiteProfile, error) {
 	if err == nil && activeName != "" {
 		profile, ok := cfg.Sites[activeName]
 		if !ok {
-			return SiteProfile{}, fmt.Errorf("active site %q not found in ~/.config/gateway/config.yaml", activeName)
+			return SiteProfile{}, fmt.Errorf("active site %q not found in %s", activeName, ClientConfigPath())
 		}
 		return profile, nil
 	}

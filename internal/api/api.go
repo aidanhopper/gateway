@@ -87,9 +87,16 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 	devCert, _ := acme.GenerateSelfSignedCert(spec.Domains)
 
 	if spec.Auto {
-		acmeMgr, err := acme.NewManager(acme.Config{
+		serverCfg, _ := config.LoadServerConfig()
+		acmeCfg := acme.Config{
 			Domains: spec.Domains,
-		})
+		}
+		if serverCfg != nil {
+			acmeCfg.Email = serverCfg.ACMEEmail
+			acmeCfg.Directory = serverCfg.ACMEDirectory
+			acmeCfg.CloudflareToken = serverCfg.ACMECloudflareToken
+		}
+		acmeMgr, err := acme.NewManager(acmeCfg)
 		if err != nil {
 			hasPublicDomain := false
 			for _, d := range spec.Domains {
