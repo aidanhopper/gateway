@@ -8,6 +8,11 @@ database: "/var/lib/gateway/gateway.db"
 
 public: false
 
+acme:
+  email: "admin@yourdomain.com" # Required for Let's Encrypt certificates
+  directory: "https://acme-v02.api.letsencrypt.org/directory"
+  cloudflare_token: "" # Cloudflare DNS API token for wildcard DNS-01 challenges
+
 firewall:
   driver: "auto" # Options: auto, ufw, iptables, pf, firewalld, dry, noop
   protected_ports:

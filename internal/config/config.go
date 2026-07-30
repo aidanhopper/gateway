@@ -62,9 +62,18 @@ type ServerConfig struct {
 		Level string `yaml:"level"`
 	} `yaml:"log"`
 
+	ACMESection struct {
+		Email           string `yaml:"email"`
+		Directory       string `yaml:"directory"`
+		CloudflareToken string `yaml:"cloudflare_token"`
+	} `yaml:"acme"`
+
 	// Resolved flat values used by daemon
-	Firewall       string       `yaml:"-"`
-	ProtectedPorts StringOrList `yaml:"-"`
+	Firewall            string       `yaml:"-"`
+	ProtectedPorts      StringOrList `yaml:"-"`
+	ACMEEmail           string       `yaml:"-"`
+	ACMEDirectory       string       `yaml:"-"`
+	ACMECloudflareToken string       `yaml:"-"`
 }
 
 func parseServerConfigData(data []byte) (*ServerConfig, error) {
@@ -83,6 +92,15 @@ func parseServerConfigData(data []byte) (*ServerConfig, error) {
 	}
 	if len(cfg.FirewallSection.ProtectedPorts) > 0 {
 		cfg.ProtectedPorts = cfg.FirewallSection.ProtectedPorts
+	}
+	if cfg.ACMESection.Email != "" {
+		cfg.ACMEEmail = cfg.ACMESection.Email
+	}
+	if cfg.ACMESection.Directory != "" {
+		cfg.ACMEDirectory = cfg.ACMESection.Directory
+	}
+	if cfg.ACMESection.CloudflareToken != "" {
+		cfg.ACMECloudflareToken = cfg.ACMESection.CloudflareToken
 	}
 	return cfg, nil
 }
@@ -162,6 +180,17 @@ func applyServerEnvOverrides(cfg *ServerConfig) {
 	}
 	if v := os.Getenv("GATEWAY_PUBLIC"); v != "" {
 		cfg.Public = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := os.Getenv("GATEWAY_ACME_EMAIL"); v != "" {
+		cfg.ACMEEmail = v
+	}
+	if v := os.Getenv("GATEWAY_ACME_DIRECTORY"); v != "" {
+		cfg.ACMEDirectory = v
+	}
+	if v := os.Getenv("CLOUDFLARE_DNS_API_TOKEN"); v != "" {
+		cfg.ACMECloudflareToken = v
+	} else if v := os.Getenv("CF_DNS_API_TOKEN"); v != "" {
+		cfg.ACMECloudflareToken = v
 	}
 }
 
