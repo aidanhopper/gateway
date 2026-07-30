@@ -101,7 +101,7 @@ func FormatStrategy(handler api.HandlerSpec) string {
 
 // RunStatus displays a Tailscale-style status dashboard of daemon health, listeners, and routes.
 func RunStatus(args []string) {
-	siteName, _ := extractSiteFlag(args)
+	siteName, _ := ExtractSiteFlag(args)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 

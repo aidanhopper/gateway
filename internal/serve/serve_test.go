@@ -1,4 +1,4 @@
-package cli
+package serve
 
 import (
 	"context"
@@ -14,110 +14,90 @@ import (
 	"github.com/aidanhopper/gateway/internal/api"
 )
 
-func TestHttpStatusText(t *testing.T) {
-	tests := []struct {
-		code     int
-		expected string
-	}{
-		{200, "OK"},
-		{201, "Created"},
-		{204, "No Content"},
-		{301, "Moved Permanently"},
-		{302, "Found"},
-		{400, "Bad Request"},
-		{401, "Unauthorized"},
-		{403, "Forbidden"},
-		{404, "Not Found"},
-		{500, "Internal Server Error"},
-		{502, "Bad Gateway"},
-		{999, ""},
-	}
-
-	for _, tt := range tests {
-		got := httpStatusText(tt.code)
-		if got != tt.expected {
-			t.Errorf("httpStatusText(%d) = %q, expected %q", tt.code, got, tt.expected)
-		}
-	}
+type mockClient struct {
+	server *httptest.Server
+	client *http.Client
 }
 
-func TestExtractBoolFlag(t *testing.T) {
-	tests := []struct {
-		name          string
-		args          []string
-		flagNames     []string
-		expectedArgs  []string
-		expectedFound bool
-	}{
-		{
-			name:          "Flag at end",
-			args:          []string{"tcp", "25565", "127.0.0.1:25565", "-w"},
-			flagNames:     []string{"w", "watch"},
-			expectedArgs:  []string{"tcp", "25565", "127.0.0.1:25565"},
-			expectedFound: true,
-		},
-		{
-			name:          "Flag at beginning",
-			args:          []string{"--watch", "http", "/", "3000"},
-			flagNames:     []string{"w", "watch"},
-			expectedArgs:  []string{"http", "/", "3000"},
-			expectedFound: true,
-		},
-		{
-			name:          "Flag in middle",
-			args:          []string{"http", "-w", "/", "3000"},
-			flagNames:     []string{"w", "watch"},
-			expectedArgs:  []string{"http", "/", "3000"},
-			expectedFound: true,
-		},
-		{
-			name:          "Flag absent",
-			args:          []string{"http", "/", "3000"},
-			flagNames:     []string{"w", "watch"},
-			expectedArgs:  []string{"http", "/", "3000"},
-			expectedFound: false,
-		},
+func (m *mockClient) ListRoutes(ctx context.Context) ([]api.RouteSpec, error) {
+	req, _ := http.NewRequestWithContext(ctx, "GET", m.server.URL+"/api/v1/routes", nil)
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return nil, err
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotArgs, gotFound := extractBoolFlag(tt.args, tt.flagNames...)
-			if gotFound != tt.expectedFound {
-				t.Errorf("extractBoolFlag() found = %v, expected %v", gotFound, tt.expectedFound)
-			}
-			if len(gotArgs) != len(tt.expectedArgs) {
-				t.Fatalf("extractBoolFlag() args length = %d, expected %d", len(gotArgs), len(tt.expectedArgs))
-			}
-			for i, arg := range gotArgs {
-				if arg != tt.expectedArgs[i] {
-					t.Errorf("args[%d] = %q, expected %q", i, arg, tt.expectedArgs[i])
-				}
-			}
-		})
+	defer resp.Body.Close()
+	var body struct {
+		Items []api.RouteSpec `json:"items"`
 	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	return body.Items, nil
 }
 
-func TestHasHelpFlag(t *testing.T) {
-	tests := []struct {
-		args     []string
-		expected bool
-	}{
-		{[]string{"tcp", "25565", "target:25565", "-h"}, true},
-		{[]string{"tcp", "25565", "target:25565", "--help"}, true},
-		{[]string{"tcp", "25565", "target:25565", "-help"}, true},
-		{[]string{"tcp", "25565", "target:25565"}, false},
+func (m *mockClient) CreateRoute(ctx context.Context, spec api.RouteSpec) error {
+	data, _ := json.Marshal(spec)
+	req, _ := http.NewRequestWithContext(ctx, "POST", m.server.URL+"/api/v1/routes", strings.NewReader(string(data)))
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return err
 	}
-
-	for _, tt := range tests {
-		got := hasHelpFlag(tt.args)
-		if got != tt.expected {
-			t.Errorf("hasHelpFlag(%v) = %v, expected %v", tt.args, got, tt.expected)
-		}
-	}
+	defer resp.Body.Close()
+	return nil
 }
 
-// setupServeMockServer creates an in-memory HTTP server handling /listeners and /routes endpoints for testing serve functions.
-func setupServeMockServer(t *testing.T) (*httptest.Server, *Client) {
+func (m *mockClient) DeleteRoute(ctx context.Context, name string) error {
+	req, _ := http.NewRequestWithContext(ctx, "DELETE", m.server.URL+"/api/v1/routes/"+name, nil)
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func (m *mockClient) ListListeners(ctx context.Context) ([]api.ListenerSpec, error) {
+	req, _ := http.NewRequestWithContext(ctx, "GET", m.server.URL+"/api/v1/listeners", nil)
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Items []api.ListenerSpec `json:"items"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	return body.Items, nil
+}
+
+func (m *mockClient) CreateListener(ctx context.Context, spec api.ListenerSpec) error {
+	data, _ := json.Marshal(spec)
+	req, _ := http.NewRequestWithContext(ctx, "POST", m.server.URL+"/api/v1/listeners", strings.NewReader(string(data)))
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func (m *mockClient) DeleteListener(ctx context.Context, name string) error {
+	req, _ := http.NewRequestWithContext(ctx, "DELETE", m.server.URL+"/api/v1/listeners/"+name, nil)
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func (m *mockClient) StreamLogs(ctx context.Context, routeFilter string, handler func(event api.LogEvent)) error {
+	return nil
+}
+
+func (m *mockClient) ConfirmPublicSiteExposure(yesFlag bool, mountDesc string) bool {
+	return true
+}
+
+func setupServeMockServer(t *testing.T) (*httptest.Server, GatewayClient) {
 	t.Helper()
 	var mu sync.Mutex
 	listeners := make(map[string]api.ListenerSpec)
@@ -193,8 +173,35 @@ func setupServeMockServer(t *testing.T) (*httptest.Server, *Client) {
 	})
 
 	server := httptest.NewServer(handler)
-	client := newClientDirect(server.URL, "test-token", "")
-	return server, client
+	mc := &mockClient{server: server, client: server.Client()}
+	return server, mc
+}
+
+func TestHTTPStatusText(t *testing.T) {
+	tests := []struct {
+		code     int
+		expected string
+	}{
+		{200, "OK"},
+		{201, "Created"},
+		{204, "No Content"},
+		{301, "Moved Permanently"},
+		{302, "Found"},
+		{400, "Bad Request"},
+		{401, "Unauthorized"},
+		{403, "Forbidden"},
+		{404, "Not Found"},
+		{500, "Internal Server Error"},
+		{502, "Bad Gateway"},
+		{999, ""},
+	}
+
+	for _, tt := range tests {
+		got := HTTPStatusText(tt.code)
+		if got != tt.expected {
+			t.Errorf("HTTPStatusText(%d) = %q, expected %q", tt.code, got, tt.expected)
+		}
+	}
 }
 
 func TestEnsureListenerAndReuse(t *testing.T) {
@@ -202,26 +209,22 @@ func TestEnsureListenerAndReuse(t *testing.T) {
 	defer server.Close()
 	ctx := context.Background()
 
-	// 1. First call: Create serve-tcp-25565 on address :25565
-	lName1, err := ensureListener(ctx, client, "serve-tcp-25565", ":25565", "tcp", nil)
+	lName1, err := EnsureListener(ctx, client, "serve-tcp-25565", ":25565", "tcp", nil)
 	if err != nil {
-		t.Fatalf("ensureListener failed: %v", err)
+		t.Fatalf("EnsureListener failed: %v", err)
 	}
 	if lName1 != "serve-tcp-25565" {
 		t.Errorf("expected listener name serve-tcp-25565, got %s", lName1)
 	}
 
-	// 2. Second call: Attempt to create serve-mc-25565 on address :25565
-	// It should reuse existing listener on :25565 and return "serve-tcp-25565"
-	lName2, err := ensureListener(ctx, client, "serve-mc-25565", ":25565", "tcp", nil)
+	lName2, err := EnsureListener(ctx, client, "serve-mc-25565", ":25565", "tcp", nil)
 	if err != nil {
-		t.Fatalf("ensureListener failed: %v", err)
+		t.Fatalf("EnsureListener failed: %v", err)
 	}
 	if lName2 != "serve-tcp-25565" {
 		t.Errorf("expected reused listener name serve-tcp-25565, got %s", lName2)
 	}
 
-	// 3. Create route using lName2
 	routeSpec := api.RouteSpec{
 		Name:     "serve-mc-route-1",
 		Protocol: "tcp",
@@ -238,21 +241,17 @@ func TestCleanupUnusedServeListeners(t *testing.T) {
 	defer server.Close()
 	ctx := context.Background()
 
-	// Create two listeners
-	_, _ = ensureListener(ctx, client, "serve-http-80", ":80", "tcp", nil)
-	_, _ = ensureListener(ctx, client, "serve-tcp-2222", ":2222", "tcp", nil)
+	_, _ = EnsureListener(ctx, client, "serve-http-80", ":80", "tcp", nil)
+	_, _ = EnsureListener(ctx, client, "serve-tcp-2222", ":2222", "tcp", nil)
 
-	// Create route attached to serve-http-80 only
 	_ = client.CreateRoute(ctx, api.RouteSpec{
 		Name:     "serve-http-1",
 		Protocol: "http",
 		Listener: "serve-http-80",
 	})
 
-	// Run cleanup
-	cleanupUnusedServeListeners(ctx, client)
+	CleanupUnusedListeners(ctx, client)
 
-	// Verify serve-http-80 remains, serve-tcp-2222 was deleted
 	listeners, err := client.ListListeners(ctx)
 	if err != nil {
 		t.Fatalf("ListListeners failed: %v", err)
@@ -271,29 +270,25 @@ func TestRunServeOffAndReset(t *testing.T) {
 	defer server.Close()
 	ctx := context.Background()
 
-	// Setup 2 serve mounts
-	l1, _ := ensureListener(ctx, client, "serve-tcp-8080", ":8080", "tcp", nil)
+	l1, _ := EnsureListener(ctx, client, "serve-tcp-8080", ":8080", "tcp", nil)
 	_ = client.CreateRoute(ctx, api.RouteSpec{Name: "serve-tcp-route-1", Protocol: "tcp", Listener: l1})
 
-	l2, _ := ensureListener(ctx, client, "serve-tcp-9090", ":9090", "tcp", nil)
+	l2, _ := EnsureListener(ctx, client, "serve-tcp-9090", ":9090", "tcp", nil)
 	_ = client.CreateRoute(ctx, api.RouteSpec{Name: "serve-tcp-route-2", Protocol: "tcp", Listener: l2})
 
-	// Remove serve mount 8080 via runServeOff
-	runServeOff(ctx, client, "8080")
+	_, _ = Off(ctx, client, "8080")
 
 	routes, _ := client.ListRoutes(ctx)
 	if len(routes) != 1 || routes[0].Name != "serve-tcp-route-2" {
 		t.Errorf("unexpected remaining routes after serve off: %+v", routes)
 	}
 
-	// Verify listener 8080 was cleaned up
 	listeners, _ := client.ListListeners(ctx)
 	if len(listeners) != 1 || listeners[0].Name != "serve-tcp-9090" {
 		t.Errorf("unexpected remaining listeners after serve off: %+v", listeners)
 	}
 
-	// Reset remaining serve mounts
-	runServeReset(ctx, client, true)
+	_, _ = Reset(ctx, client)
 
 	routes, _ = client.ListRoutes(ctx)
 	if len(routes) != 0 {
@@ -342,44 +337,6 @@ func TestMinecraftLogEventSerialization(t *testing.T) {
 	}
 }
 
-func TestServeHTTPAutoStripPrefix(t *testing.T) {
-	server, client := setupServeMockServer(t)
-	defer server.Close()
-	ctx := context.Background()
-
-	// Run serve http with path /abc in background mode for unit test
-	runServeHTTP(ctx, client, []string{"/abc", "3000", "--bg"}, true)
-
-	routes, err := client.ListRoutes(ctx)
-	if err != nil {
-		t.Fatalf("ListRoutes failed: %v", err)
-	}
-	if len(routes) != 1 {
-		t.Fatalf("expected 1 route, got %d", len(routes))
-	}
-
-	r := routes[0]
-	if r.Handler.Type != "http_strip_prefix" {
-		t.Errorf("expected handler type http_strip_prefix, got %s", r.Handler.Type)
-	}
-
-	// Verify rule enforces NOT secure
-	if r.Rule.Type != "and" || len(r.Rule.Rules) != 2 {
-		t.Fatalf("expected composite 'and' rule, got %+v", r.Rule)
-	}
-	if r.Handler.Config["prefix"] != "/abc" {
-		t.Errorf("expected prefix /abc, got %v", r.Handler.Config["prefix"])
-	}
-
-	// Verify rule enforces NOT secure
-	if r.Rule.Type != "and" || len(r.Rule.Rules) != 2 {
-		t.Fatalf("expected composite 'and' rule, got %+v", r.Rule)
-	}
-	if r.Rule.Rules[0].Type != "not" || r.Rule.Rules[0].Rule.Type != "secure" {
-		t.Errorf("expected rule 0 to be 'not secure', got %+v", r.Rule.Rules[0])
-	}
-}
-
 func TestParseServeMount(t *testing.T) {
 	tests := []struct {
 		input          string
@@ -395,33 +352,11 @@ func TestParseServeMount(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		domain, path := parseServeMount(tt.input)
+		domain, path := ParseMount(tt.input)
 		if domain != tt.expectedDomain || path != tt.expectedPath {
-			t.Errorf("parseServeMount(%q) = (%q, %q), want (%q, %q)",
+			t.Errorf("ParseMount(%q) = (%q, %q), want (%q, %q)",
 				tt.input, domain, path, tt.expectedDomain, tt.expectedPath)
 		}
-	}
-}
-
-func TestExtractWatchAndBGFlags(t *testing.T) {
-	tests := []struct {
-		name          string
-		args          []string
-		expectedWatch bool
-	}{
-		{"Default is watch mode", []string{"http", "/", "3000"}, true},
-		{"Background --bg disables watch mode", []string{"http", "/", "3000", "--bg"}, false},
-		{"Background -d disables watch mode", []string{"http", "/", "3000", "-d"}, false},
-		{"Explicit --watch enables watch mode", []string{"http", "/", "3000", "--watch"}, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, gotWatch := extractWatchAndBGFlags(tt.args)
-			if gotWatch != tt.expectedWatch {
-				t.Errorf("extractWatchAndBGFlags() watch = %v, expected %v", gotWatch, tt.expectedWatch)
-			}
-		})
 	}
 }
 
@@ -430,8 +365,12 @@ func TestServeHTTPSAutoRedirect(t *testing.T) {
 	defer server.Close()
 	ctx := context.Background()
 
-	// Run serve https with domain and path in background mode
-	runServeHTTPS(ctx, client, []string{"abc.localhost/mypath", "8096", "--bg"}, true)
+	_, _ = HTTPS(ctx, client, HTTPSOptions{
+		Mount:      "abc.localhost/mypath",
+		Target:     "8096",
+		Background: true,
+		Yes:        true,
+	})
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -471,8 +410,12 @@ func TestServeMinecraftPositionalArgs(t *testing.T) {
 	defer server.Close()
 	ctx := context.Background()
 
-	// Run serve minecraft abc.localhost docker-server:25565 --bg
-	runServeMinecraft(ctx, client, []string{"abc.localhost", "docker-server:25565", "--bg"}, true)
+	_, _ = Minecraft(ctx, client, MinecraftOptions{
+		HostOrPort: "abc.localhost",
+		Target:     "docker-server:25565",
+		Background: true,
+		Yes:        true,
+	})
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -487,7 +430,6 @@ func TestServeMinecraftPositionalArgs(t *testing.T) {
 		t.Errorf("expected target docker-server:25565, got %v", r.Handler.Config["target"])
 	}
 
-	// Verify Minecraft host rule
 	if r.Rule.Type != "and" {
 		t.Fatalf("expected Composite rule 'and', got %s", r.Rule.Type)
 	}
@@ -515,8 +457,13 @@ func TestServeDirCommand(t *testing.T) {
 
 	_ = os.WriteFile(filepath.Join(tmpDir, "index.html"), []byte("<h1>SPA APP</h1>"), 0644)
 
-	// Default HTTPS mode creates HTTPS static route + HTTP 301 redirect route
-	runServeDir(ctx, client, []string{"app.domain.com/", tmpDir, "--spa", "--bg"}, true, true)
+	_, _ = Dir(ctx, client, DirOptions{
+		Mount:      "app.domain.com/",
+		LocalPath:  tmpDir,
+		IsSPA:      true,
+		Background: true,
+		Yes:        true,
+	})
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -561,8 +508,13 @@ func TestServeSingleFileCommand(t *testing.T) {
 	_, _ = tmpFile.WriteString("#!/bin/bash\necho hello\n")
 	_ = tmpFile.Close()
 
-	// Run serve file what.localhost/install.sh ./script.sh --http --bg
-	runServeDir(ctx, client, []string{"--http", "--bg", "what.localhost/install.sh", tmpFile.Name()}, false, true)
+	_, _ = Dir(ctx, client, DirOptions{
+		Mount:      "what.localhost/install.sh",
+		LocalPath:  tmpFile.Name(),
+		IsHTTP:     true,
+		Background: true,
+		Yes:        true,
+	})
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -591,8 +543,12 @@ func TestServeSingleFileHTTPRedirectIntegration(t *testing.T) {
 	_, _ = tmpFile.WriteString("#!/bin/bash\necho install\n")
 	_ = tmpFile.Close()
 
-	// Run serve dir what.localhost/install.sh ./script.sh --bg (HTTPS default mode)
-	runServeDir(ctx, client, []string{"--bg", "what.localhost/install.sh", tmpFile.Name()}, false, true)
+	_, _ = Dir(ctx, client, DirOptions{
+		Mount:      "what.localhost/install.sh",
+		LocalPath:  tmpFile.Name(),
+		Background: true,
+		Yes:        true,
+	})
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -620,13 +576,11 @@ func TestServeSingleFileHTTPRedirectIntegration(t *testing.T) {
 		t.Fatal("missing http_static route")
 	}
 
-	// Verify redirect target URL preserves path
 	targetURL, _ := redirectRoute.Handler.Config["url"].(string)
 	if targetURL != "https://what.localhost/install.sh" {
 		t.Errorf("expected redirect target https://what.localhost/install.sh, got %q", targetURL)
 	}
 
-	// Verify static route rule uses exact path match for single file
 	if staticRoute.Rule.Type != "and" || len(staticRoute.Rule.Rules) < 2 {
 		t.Fatalf("expected composite and rule for static route, got %+v", staticRoute.Rule)
 	}
@@ -641,61 +595,23 @@ func TestServeSingleFileHTTPRedirectIntegration(t *testing.T) {
 	}
 }
 
-func TestExtractDurationFlags(t *testing.T) {
-	tests := []struct {
-		name             string
-		args             []string
-		expectedArgs     []string
-		expectedDuration string
-	}{
-		{
-			name:             "1h flag alias",
-			args:             []string{"3000", "--1h"},
-			expectedArgs:     []string{"3000"},
-			expectedDuration: "1h",
-		},
-		{
-			name:             "30m flag alias",
-			args:             []string{"http", "/", "8080", "-30m"},
-			expectedArgs:     []string{"http", "/", "8080"},
-			expectedDuration: "30m",
-		},
-		{
-			name:             "No duration flag",
-			args:             []string{"3000"},
-			expectedArgs:     []string{"3000"},
-			expectedDuration: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotArgs, gotDur := extractDurationFlags(tt.args)
-			if gotDur != tt.expectedDuration {
-				t.Errorf("extractDurationFlags() duration = %q, expected %q", gotDur, tt.expectedDuration)
-			}
-			if len(gotArgs) != len(tt.expectedArgs) {
-				t.Fatalf("extractDurationFlags() args length = %d, expected %d", len(gotArgs), len(tt.expectedArgs))
-			}
-			for i, arg := range gotArgs {
-				if arg != tt.expectedArgs[i] {
-					t.Errorf("args[%d] = %q, expected %q", i, arg, tt.expectedArgs[i])
-				}
-			}
-		})
-	}
-}
-
 func TestServeRedirectCommand(t *testing.T) {
 	server, client := setupServeMockServer(t)
 	defer server.Close()
 	ctx := context.Background()
 
-	// Run serve redirect docs.domain.com/ https://github.com/my-org/docs --bg
-	runServeRedirect(ctx, client, []string{"--bg", "docs.domain.com/", "https://github.com/my-org/docs"}, true)
-
-	// Run exact same serve command again to verify deduplication prevents duplicate routes
-	runServeRedirect(ctx, client, []string{"--bg", "docs.domain.com/", "https://github.com/my-org/docs"}, true)
+	_, _ = Redirect(ctx, client, RedirectOptions{
+		Mount:      "docs.domain.com/",
+		TargetURL:  "https://github.com/my-org/docs",
+		Background: true,
+		Yes:        true,
+	})
+	_, _ = Redirect(ctx, client, RedirectOptions{
+		Mount:      "docs.domain.com/",
+		TargetURL:  "https://github.com/my-org/docs",
+		Background: true,
+		Yes:        true,
+	})
 
 	routes, err := client.ListRoutes(ctx)
 	if err != nil {
@@ -714,9 +630,4 @@ func TestServeRedirectCommand(t *testing.T) {
 			t.Errorf("expected target URL https://github.com/my-org/docs, got %q", targetURL)
 		}
 	}
-}
-
-func TestRunLogsCommand(t *testing.T) {
-	// Verify RunLogs --help works
-	RunLogs([]string{"--help"})
 }

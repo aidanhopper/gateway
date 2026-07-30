@@ -1,0 +1,18 @@
+# Production Server Configuration Template for Gateway Daemon
+# Location: /etc/gateway/server.yaml
+
+api:
+  listen: "127.0.0.1:9090"
+
+database: "/var/lib/gateway/gateway.db"
+
+public: false
+
+firewall:
+  driver: "auto" # Options: auto, ufw, iptables, pf, firewalld, dry, noop
+  protected_ports:
+    - 22
+    - 9090
+
+log:
+  level: "info"

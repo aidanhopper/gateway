@@ -46,7 +46,7 @@ func PromptInput(prompt string) string {
 	select {
 	case <-sigChan:
 		signal.Stop(sigChan)
-		fmt.Println("\n[INFO] Operation cancelled.")
+		fmt.Println("[INFO] Operation cancelled.")
 		os.Exit(0)
 		return ""
 	case res := <-resChan:
@@ -93,7 +93,7 @@ func PrintUsage() {
 	fmt.Println("  site (sites)              Manage target Gateway sites (list, use, ping)")
 	fmt.Println("                            Config: ~/.config/gateway/config.yaml")
 	fmt.Printf("\n%s\n", ColorBold("Management Commands:"))
-	fmt.Println("  token (tokens)            Manage API authentication tokens (create, list, revoke)")
+	fmt.Println("  token (tokens)            Manage local daemon API auth tokens (create, list, revoke)")
 	fmt.Println("  listener (listeners)      Inspect and force-delete listeners (list, delete)")
 	fmt.Println("  route (routes)            Inspect and force-delete routes (list, delete)")
 	fmt.Printf("\n%s\n", ColorBold("Global Flags:"))
@@ -111,15 +111,13 @@ func PrintUsage() {
 // set public: true in ~/.config/gateway/server.yaml or GATEWAY_PUBLIC=true on the daemon.
 // If the daemon is unreachable the prompt is skipped (routes would fail anyway).
 func ConfirmPublicSiteExposure(client *Client, yesFlag bool, targetDesc string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	health, err := client.Health(ctx)
-	if err != nil {
-		// Daemon unreachable — cannot be publicly serving traffic; skip prompt.
+	if yesFlag {
 		return true
 	}
-
+	health, err := client.Health(context.Background())
+	if err != nil {
+		return true
+	}
 	isPublic, _ := health["public"].(bool)
 	if !isPublic {
 		return true
@@ -129,26 +127,26 @@ func ConfirmPublicSiteExposure(client *Client, yesFlag bool, targetDesc string) 
 	if siteDisplayName == "" {
 		siteDisplayName = "default"
 	}
-	fmt.Printf("%s Target site %q is PUBLICLY exposed to the open Internet (%s).\n", BadgeWarning("[WARNING]"), siteDisplayName, client.BaseURL)
+	fmt.Printf("[WARNING] Target site %q is PUBLICLY exposed to the open Internet (%s).\n", siteDisplayName, client.BaseURL)
 	if targetDesc != "" {
-		fmt.Printf("%s %s will be publicly accessible.\n", BadgeInfo("[INFO]"), targetDesc)
-	}
-
-	if yesFlag {
-		return true
+		fmt.Printf("[INFO] %s will be publicly accessible.\n", targetDesc)
 	}
 
 	if fileInfo, err := os.Stdin.Stat(); err == nil && (fileInfo.Mode()&os.ModeCharDevice) == 0 {
-		fmt.Fprintf(os.Stderr, "%s Target site %q is public. Exposing to open Internet requires -y / --yes flag in non-interactive shell.\n", BadgeError("[ERROR]"), siteDisplayName)
+		fmt.Fprintf(os.Stderr, "[ERROR] Target site %q is public. Exposing to open Internet requires -y / --yes flag in non-interactive shell.\n", siteDisplayName)
 		os.Exit(2)
 	}
 
-	input := strings.ToLower(PromptInput("\nAre you sure you want to proceed? [y/N]: "))
+	input := strings.ToLower(PromptInput("Are you sure you want to proceed? [y/N]: "))
 	if input == "y" || input == "yes" {
 		return true
 	}
-	fmt.Printf("%s Operation cancelled.\n", BadgeInfo("[INFO]"))
+	fmt.Println("[INFO] Operation cancelled.")
 	return false
+}
+
+func (c *Client) ConfirmPublicSiteExposure(yesFlag bool, targetDesc string) bool {
+	return ConfirmPublicSiteExposure(c, yesFlag, targetDesc)
 }
 
 // RunDaemon starts the Gateway network proxy engine and REST API server.
@@ -195,35 +193,35 @@ func RunDaemon(args []string) {
 		if isPublic {
 			publicStr = "public"
 		}
-		log.Printf("REST API server listening on %s (DB: %s, Firewall: %s, Protected: %s, Visibility: %s)\n",
-			*addr, *dbPath, *fwDriver, *protectedPorts, publicStr)
+		api.LogInfo("DAEMON", "REST API server listening on %s (db: %s, firewall: %s, visibility: %s)", *addr, *dbPath, *fwDriver, publicStr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("REST API server error: %v\n", err)
+			api.LogError("DAEMON", "REST API server error: %v", err)
+			os.Exit(1)
 		}
 	}()
 
 	go func() {
-		log.Println("Gateway network proxy engine started")
+		api.LogInfo("DAEMON", "Gateway network proxy engine started")
 		if err := gw.Listen(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("Gateway listen error: %v\n", err)
+			api.LogWarn("DAEMON", "Gateway listen error: %v", err)
 		}
 	}()
 
 	<-ctx.Done()
-	log.Println("Shutting down gateway and API server...")
+	api.LogInfo("DAEMON", "Signal SIGINT/SIGTERM received; starting graceful shutdown...")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(shutdownCtx)
 
-	log.Println("Shutdown complete.")
+	api.LogInfo("DAEMON", "Shutdown complete.")
 }
 
-// RunToken manages API authentication tokens.
+// RunToken manages local daemon API authentication tokens directly in SQLite.
 func RunToken(subcmd string, args []string) {
 	ctx := context.Background()
 	fs := flag.NewFlagSet("token", flag.ExitOnError)
-	siteName, args := extractSiteFlag(args)
+	siteName, args := ExtractSiteFlag(args)
 	args, yesMode := extractBoolFlag(args, "y", "yes")
 
 	switch subcmd {
@@ -240,7 +238,7 @@ func RunToken(subcmd string, args []string) {
 		if err != nil {
 			log.Fatalf("failed to create token: %v", err)
 		}
-		fmt.Printf("Created token %q (ID: %s)\nToken: %s\n", *name, id, token)
+		fmt.Printf("Created token %q (ID: %s) in local daemon DB (%s)\nToken: %s\n", *name, id, client.DBPath, token)
 		fmt.Printf("\n%s\n", ColorBold(ColorCyan("[NEXT STEPS]")))
 		fmt.Printf("  Export token:  export GATEWAY_API_TOKEN=%q\n", token)
 		fmt.Println("  List tokens:   gateway tokens list")
@@ -255,7 +253,7 @@ func RunToken(subcmd string, args []string) {
 		}
 
 		if len(tokens) == 0 {
-			fmt.Println("No tokens found.")
+			fmt.Printf("No tokens found in local daemon DB (%s).\n", client.DBPath)
 			return
 		}
 
@@ -281,10 +279,11 @@ func RunToken(subcmd string, args []string) {
 		if err := client.RevokeToken(ctx, targetID); err != nil {
 			log.Fatalf("failed to revoke token: %v", err)
 		}
-		fmt.Printf("Revoked token %s\n", targetID)
+		fmt.Printf("Revoked token %s in local daemon DB (%s)\n", targetID, client.DBPath)
 
 	default:
 		fmt.Println("Usage: gateway token <create|list|revoke> [flags]")
+		fmt.Println("Note: Token commands access the local daemon SQLite database directly, not remote sites.")
 		os.Exit(2)
 	}
 }
@@ -293,7 +292,7 @@ func RunToken(subcmd string, args []string) {
 func RunListener(subcmd string, args []string) {
 	ctx := context.Background()
 	fs := flag.NewFlagSet("listener", flag.ExitOnError)
-	siteName, args := extractSiteFlag(args)
+	siteName, args := ExtractSiteFlag(args)
 
 	switch subcmd {
 	case "list", "ls":
@@ -340,7 +339,7 @@ func RunListener(subcmd string, args []string) {
 func RunRoute(subcmd string, args []string) {
 	ctx := context.Background()
 	fs := flag.NewFlagSet("route", flag.ExitOnError)
-	siteName, args := extractSiteFlag(args)
+	siteName, args := ExtractSiteFlag(args)
 
 	switch subcmd {
 	case "list", "ls":
@@ -394,7 +393,7 @@ func printJSONOrTable(data []byte) {
 
 // RunLogs streams live logs for a route or all background routes.
 func RunLogs(args []string) {
-	siteName, args := extractSiteFlag(args)
+	siteName, args := ExtractSiteFlag(args)
 	args, yesMode := extractBoolFlag(args, "y", "yes")
 	if hasHelpFlag(args) {
 		fmt.Println("Usage: gateway logs [route_name] [flags]")

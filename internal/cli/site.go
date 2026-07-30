@@ -5,15 +5,18 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/aidanhopper/gateway/internal/api"
 	"github.com/aidanhopper/gateway/internal/config"
 )
 
-// extractSiteFlag scans args for --site <name> or -site <name> and returns
+// ExtractSiteFlag scans args for --site <name> or -site <name> and returns
 // the site name and the remaining args with the flag removed.
-func extractSiteFlag(args []string) (siteName string, rest []string) {
+func ExtractSiteFlag(args []string) (siteName string, rest []string) {
 	for i := 0; i < len(args); i++ {
 		if (args[i] == "--site" || args[i] == "-site") && i+1 < len(args) {
 			siteName = args[i+1]
@@ -46,8 +49,14 @@ func RunSite(subcmd string, args []string) {
 			name = args[0]
 		}
 		runSitePing(name)
+	case "logs", "log":
+		name := ""
+		if len(args) > 0 {
+			name = args[0]
+		}
+		runSiteLogs(name)
 	default:
-		fmt.Println("Usage: gateway site <list|use|ping> [args]")
+		fmt.Println("Usage: gateway site <list|use|ping|logs> [args]")
 		os.Exit(2)
 	}
 }
@@ -76,7 +85,7 @@ func runSiteList() {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		client := newClientDirect(profile.URL, profile.Token, "")
+		client := NewClientDirect(profile.URL, profile.Token, "")
 		siteHealth, err := client.Health(ctx)
 		cancel()
 
@@ -112,12 +121,12 @@ func runSiteUse(name string) {
 		for n := range cfg.Sites {
 			siteNames = append(siteNames, n)
 		}
-		fmt.Println("\nSelect Gateway site to use:")
+		fmt.Println("Select Gateway site to use:")
 		for i, n := range siteNames {
 			p := cfg.Sites[n]
 			fmt.Printf("  %d) %-15s (%s)\n", i+1, n, p.URL)
 		}
-		input := PromptInput("\nEnter number (or 0 to cancel): ")
+		input := PromptInput("Enter number (or 0 to cancel): ")
 		var choice int
 		if _, err := fmt.Sscanf(input, "%d", &choice); err == nil && choice > 0 && choice <= len(siteNames) {
 			name = siteNames[choice-1]
@@ -202,4 +211,24 @@ func newHealthRequest(profile config.SiteProfile) (*http.Request, error) {
 		req.Header.Set("Authorization", "Bearer "+profile.Token)
 	}
 	return req, nil
+}
+
+func runSiteLogs(nameOverride string) {
+	client := NewClient(nameOverride)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	fmt.Println("[INFO] Streaming daemon system logs... Press Ctrl+C to stop.")
+	fmt.Println("-----------------------------------------------------------------------------------------")
+
+	err := client.StreamSystemLogs(ctx, func(event api.SystemLogEvent) {
+		timeStr := event.Timestamp.Format("15:04:05")
+		lvlPadded := fmt.Sprintf("%-5s", event.Level)
+		compPadded := fmt.Sprintf("%-8s", event.Component)
+		fmt.Printf("[%s] [%s] [%s] %s\n", timeStr, lvlPadded, compPadded, event.Message)
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		os.Exit(1)
+	}
 }

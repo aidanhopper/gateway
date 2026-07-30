@@ -42,3 +42,20 @@ func ParseTTL(input string) (time.Duration, error) {
 
 	return 0, fmt.Errorf("invalid duration format %q (examples: 30s, 15m, 2h, 1d)", input)
 }
+
+// ExtractDurationFlags pre-scans args for duration shorthand flags like --1h, --30m, --1d, -1h, etc.
+// Returns cleaned args and the extracted duration string if found.
+func ExtractDurationFlags(args []string) ([]string, string) {
+	var out []string
+	var foundDur string
+	for _, a := range args {
+		trimmed := strings.TrimPrefix(strings.TrimPrefix(a, "--"), "-")
+		if _, err := ParseTTL(trimmed); err == nil && trimmed != "" && len(trimmed) > 1 && !strings.Contains(a, "=") && (strings.HasSuffix(trimmed, "s") || strings.HasSuffix(trimmed, "m") || strings.HasSuffix(trimmed, "h") || strings.HasSuffix(trimmed, "d")) {
+			foundDur = trimmed
+		} else {
+			out = append(out, a)
+		}
+	}
+	return out, foundDur
+}
+

@@ -45,7 +45,7 @@ func TestClientAPIAndFallback(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	dbPath := filepath.Join(tmpDir, "test.db")
 
-	client := newClientDirect(server.URL, "test-token", dbPath)
+	client := NewClientDirect(server.URL, "test-token", dbPath)
 
 	// Test Health
 	health, err := client.Health(ctx)
@@ -78,7 +78,7 @@ func TestClientAPIAndFallback(t *testing.T) {
 	}
 
 	// 2. Test Offline SQLite Fallback
-	offlineClient := newClientDirect("http://127.0.0.1:59999", "", dbPath) // Unreachable port
+	offlineClient := NewClientDirect("http://127.0.0.1:59999", "", dbPath) // Unreachable port
 
 	// Create listener directly in DB
 	err = offlineClient.CreateListener(ctx, api.ListenerSpec{Name: "offline-ln", Address: ":9090", Protocol: "tcp"})

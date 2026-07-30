@@ -1,4 +1,25 @@
+# Binaries and Build Artifacts
 gateway
-cert
-bin
-*.env
+bin/
+dist/
+
+# SQLite Database Files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Certificates and Keys
+cert/
+*.pem
+*.crt
+*.key
+
+# Environment and Local Config
+.env
+.env.*
+
+# OS and IDE Artifacts
+.DS_Store
+.vscode/
+.idea/

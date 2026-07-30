@@ -5,9 +5,9 @@ import (
 	"log"
 	"net"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Manager defines the interface for managing OS firewall port rules.
@@ -96,6 +96,19 @@ func NewProtectedManager(target Manager, protectedStr string) *ProtectedManager 
 	}
 }
 
+// Logger is an optional callback to route firewall log events to system loggers.
+var Logger func(level, format string, args ...any)
+
+func logFirewall(level, format string, args ...any) {
+	if Logger != nil {
+		Logger(level, format, args...)
+		return
+	}
+	timeStr := time.Now().Format("2006-01-02 15:04:05")
+	lvlPadded := fmt.Sprintf("%-5s", strings.ToUpper(strings.TrimSpace(level)))
+	log.Printf("[%s] [%s] [FIREWALL] %s\n", timeStr, lvlPadded, fmt.Sprintf(format, args...))
+}
+
 func (pm *ProtectedManager) OpenPort(protocol string, port int) error {
 	return pm.target.OpenPort(protocol, port)
 }
@@ -103,6 +116,7 @@ func (pm *ProtectedManager) OpenPort(protocol string, port int) error {
 func (pm *ProtectedManager) ClosePort(protocol string, port int) error {
 	protocol = strings.ToLower(protocol)
 	if pm.protected[protectedKey{protocol: protocol, port: port}] {
+		logFirewall("WARN", "refusing to close protected port %s/%d (protected by GATEWAY_PROTECTED_PORTS)", protocol, port)
 		return fmt.Errorf("refusing to close protected port %s/%d (protected by GATEWAY_PROTECTED_PORTS)", protocol, port)
 	}
 	return pm.target.ClosePort(protocol, port)
@@ -123,7 +137,7 @@ func (m *DryManager) OpenPort(protocol string, port int) error {
 	if m.Logger != nil {
 		m.Logger.Println(msg)
 	} else {
-		log.Println(msg)
+		logFirewall("INFO", "dry run: would open %s port %d", strings.ToLower(protocol), port)
 	}
 	return nil
 }
@@ -133,7 +147,7 @@ func (m *DryManager) ClosePort(protocol string, port int) error {
 	if m.Logger != nil {
 		m.Logger.Println(msg)
 	} else {
-		log.Println(msg)
+		logFirewall("INFO", "dry run: would close %s port %d", strings.ToLower(protocol), port)
 	}
 	return nil
 }
@@ -152,7 +166,12 @@ func (m *NoopManager) ClosePort(protocol string, port int) error { return nil }
 // Detect resolves a FirewallManager based on driver name or OS environment, wrapped in ProtectedManager.
 func Detect(driver string, protectedPorts string) Manager {
 	var base Manager
-	switch strings.ToLower(strings.TrimSpace(driver)) {
+	drvName := strings.ToLower(strings.TrimSpace(driver))
+	if drvName == "" {
+		drvName = "auto"
+	}
+
+	switch drvName {
 	case "dry":
 		base = NewDryManager()
 	case "none", "noop":
@@ -165,15 +184,12 @@ func Detect(driver string, protectedPorts string) Manager {
 		base = NewIPTablesManager()
 	case "nftables":
 		base = NewNFTablesManager()
-	case "auto", "":
-		if runtime.GOOS == "darwin" {
-			base = NewDryManager()
-		} else {
-			base = NewDryManager()
-		}
+	case "auto":
+		base = NewDryManager()
 	default:
 		base = NewDryManager()
 	}
 
+	logFirewall("INFO", "detected host firewall driver: %s", drvName)
 	return NewProtectedManager(base, protectedPorts)
 }

@@ -9,23 +9,64 @@ import (
 	"net"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
 
+// MinecraftInfoSpec represents Minecraft protocol metadata in log events.
+type MinecraftInfoSpec struct {
+	RequestedHost   string `json:"requested_host,omitempty"`
+	RequestedPort   uint16 `json:"requested_port,omitempty"`
+	ProtocolState   int    `json:"protocol_state,omitempty"` // 1 = status ping, 2 = login
+	ProtocolVersion int    `json:"protocol_version,omitempty"`
+	Username        string `json:"username,omitempty"`
+	IsLoginStart    bool   `json:"is_login_start,omitempty"`
+}
+
 // LogEvent is emitted for every proxied request/connection through the Gateway.
 type LogEvent struct {
-	Timestamp     time.Time      `json:"timestamp"`
-	Protocol      string         `json:"protocol"` // "http", "tcp", "udp", "minecraft"
-	Route         string         `json:"route"`
-	Listener      string         `json:"listener"`
-	Method        string         `json:"method,omitempty"`
-	Path          string         `json:"path,omitempty"`
-	Status        int            `json:"status,omitempty"`
-	DurationMs    int64          `json:"duration_ms"`
-	RemoteIP      string         `json:"remote_ip"`
-	Error         string         `json:"error,omitempty"`
-	MinecraftInfo *MinecraftInfo `json:"minecraft_info,omitempty"`
+	Timestamp     time.Time          `json:"timestamp"`
+	Protocol      string             `json:"protocol"` // "http", "tcp", "udp", "minecraft"
+	Route         string             `json:"route"`
+	Listener      string             `json:"listener"`
+	Method        string             `json:"method,omitempty"`
+	Path          string             `json:"path,omitempty"`
+	Status        int                `json:"status,omitempty"`
+	DurationMs    int64              `json:"duration_ms"`
+	RemoteIP      string             `json:"remote_ip"`
+	Error         string             `json:"error,omitempty"`
+	MinecraftInfo *MinecraftInfoSpec `json:"minecraft_info,omitempty"`
+}
+
+// SystemLogger is an optional callback to route gateway internal system logs.
+var SystemLogger func(level, component, format string, args ...any)
+
+func logSystemFallback(level, component, format string, args ...any) {
+	if SystemLogger != nil {
+		SystemLogger(level, component, format, args...)
+		return
+	}
+	timeStr := time.Now().Format("2006-01-02 15:04:05")
+	lvlPadded := fmt.Sprintf("%-5s", strings.ToUpper(strings.TrimSpace(level)))
+	compPadded := fmt.Sprintf("%-8s", strings.ToUpper(strings.TrimSpace(component)))
+	msg := fmt.Sprintf(format, args...)
+	log.Printf("[%s] [%s] [%s] %s\n", timeStr, lvlPadded, compPadded, msg)
+}
+
+// LogInfo logs an informational message.
+func LogInfo(component, format string, args ...any) {
+	logSystemFallback("INFO", component, format, args...)
+}
+
+// LogWarn logs a warning message.
+func LogWarn(component, format string, args ...any) {
+	logSystemFallback("WARN", component, format, args...)
+}
+
+// LogError logs an error message.
+func LogError(component, format string, args ...any) {
+	logSystemFallback("ERROR", component, format, args...)
 }
 
 // statusResponseWriter captures the status code written by a downstream handler.
@@ -272,15 +313,23 @@ func (gw *Gateway) tcpAcceptLoop(ctx context.Context, lnName string, ln net.List
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("listener %s: accept error: %v\n", lnName, err)
+				LogWarn("LISTENER", "listener %s accept error: %v", lnName, err)
 				return
 			}
 		}
 		state.registerConn("", conn)
-		go func(c net.Conn) {
-			defer state.unregisterConn("", c)
+		remoteAddr := conn.RemoteAddr().String()
+		LogInfo("LISTENER", "accepted connection from %s on listener %s (active conns: %d)", remoteAddr, lnName, state.connCount())
+
+		go func(c net.Conn, rAddr string) {
+			start := time.Now()
+			defer func() {
+				state.unregisterConn("", c)
+				dur := time.Since(start).Truncate(time.Millisecond)
+				LogInfo("LISTENER", "connection from %s on listener %s closed (duration: %v, active conns: %d)", rAddr, lnName, dur, state.connCount())
+			}()
 			gw.handleConnection(ctx, lnName, c)
-		}(conn)
+		}(conn, remoteAddr)
 	}
 }
 
@@ -388,13 +437,25 @@ func (gw *Gateway) handleTCPConnection(ctx context.Context, lnName string, conn 
 			proto = "minecraft"
 		}
 
+		var mc *MinecraftInfoSpec
+		if meta.Minecraft != nil {
+			mc = &MinecraftInfoSpec{
+				RequestedHost:   meta.Minecraft.RequestedHost,
+				RequestedPort:   meta.Minecraft.RequestedPort,
+				ProtocolState:   meta.Minecraft.ProtocolState,
+				ProtocolVersion: meta.Minecraft.ProtocolVersion,
+				Username:        meta.Minecraft.Username,
+				IsLoginStart:    meta.Minecraft.IsLoginStart,
+			}
+		}
+
 		gw.emitLog(LogEvent{
 			Timestamp:     start,
 			Protocol:      proto,
 			Route:         route.Name,
 			Listener:      lnName,
 			RemoteIP:      remoteAddr,
-			MinecraftInfo: meta.Minecraft,
+			MinecraftInfo: mc,
 		})
 
 		route.Handler.ServeTCP(conn, meta)
@@ -412,30 +473,31 @@ func (gw *Gateway) handleTLSConnection(ctx context.Context, lnName string, conn 
 	listener, ok := gw.listeners[lnName]
 	gw.mu.RUnlock()
 	if !ok {
-		log.Printf("listener %s no longer exists\n", lnName)
+		LogWarn("GATEWAY", "listener %s no longer exists", lnName)
 		return
 	}
 
 	tlsInfo, err := conn.getTLSInfo()
 	if err != nil {
-		log.Println(err)
+		LogWarn("GATEWAY", "listener %s failed to parse TLS info: %v", lnName, err)
 		return
 	}
 
 	if listener.TLSHandler == nil {
-		log.Printf("no tls handler configured for listener %s\n", lnName)
+		LogWarn("GATEWAY", "no TLS handler configured for listener %s", lnName)
 		return
 	}
 
-	config, err := listener.TLSHandler.Handle(tlsInfo)
+	tlsConfig, err := listener.TLSHandler.Handle(tlsInfo)
 	if err != nil {
-		log.Println(err)
+		LogWarn("GATEWAY", "listener %s TLS config error: %v", lnName, err)
 		return
 	}
 
-	tlsConn := tls.Server(conn, config)
+	tlsConn := tls.Server(conn, tlsConfig)
 	if err := tlsConn.Handshake(); err != nil {
-		log.Println(err)
+		LogWarn("GATEWAY", "listener %s TLS handshake failed from %s: %v", lnName, conn.RemoteAddr(), err)
+		tlsConn.Close()
 		return
 	}
 
@@ -448,7 +510,7 @@ func (gw *Gateway) handleHTTPConnection(ctx context.Context, lnName string, conn
 	gw.mu.RUnlock()
 	if !ok {
 		conn.Close()
-		log.Printf("could not get listener state for %s\n", lnName)
+		LogWarn("GATEWAY", "could not get listener state for %s", lnName)
 		return
 	}
 
@@ -482,7 +544,7 @@ func (gw *Gateway) handleHTTPConnection(ctx context.Context, lnName string, conn
 
 	ln := &singleConnListener{conn: conn}
 	if err := server.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Println(err)
+		LogWarn("GATEWAY", "listener %s HTTP server error: %v", lnName, err)
 	}
 }
 

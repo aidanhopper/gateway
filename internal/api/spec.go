@@ -1,6 +1,6 @@
 package api
 
-import "time"
+import "github.com/aidanhopper/gateway/internal/gateway"
 
 // TLSConfigSpec defines TLS configuration options for a listener.
 type TLSConfigSpec struct {
@@ -48,27 +48,8 @@ type RouteSpec struct {
 }
 
 // MinecraftInfoSpec represents Minecraft protocol metadata in log events.
-type MinecraftInfoSpec struct {
-	RequestedHost   string `json:"requested_host,omitempty"`
-	RequestedPort   uint16 `json:"requested_port,omitempty"`
-	ProtocolState   int    `json:"protocol_state,omitempty"` // 1 = status ping, 2 = login
-	ProtocolVersion int    `json:"protocol_version,omitempty"`
-	Username        string `json:"username,omitempty"`
-	IsLoginStart    bool   `json:"is_login_start,omitempty"`
-}
+type MinecraftInfoSpec = gateway.MinecraftInfoSpec
 
 // LogEvent represents a request/connection log event streamed over the API.
-type LogEvent struct {
-	Timestamp     time.Time          `json:"timestamp"`
-	Protocol      string             `json:"protocol"` // "http", "tcp", "udp", "minecraft"
-	Route         string             `json:"route"`
-	Listener      string             `json:"listener"`
-	Method        string             `json:"method,omitempty"`
-	Path          string             `json:"path,omitempty"`
-	Status        int                `json:"status,omitempty"`
-	DurationMs    int64              `json:"duration_ms"`
-	RemoteIP      string             `json:"remote_ip"`
-	Error         string             `json:"error,omitempty"`
-	MinecraftInfo *MinecraftInfoSpec `json:"minecraft_info,omitempty"`
-}
+type LogEvent = gateway.LogEvent
 

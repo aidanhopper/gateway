@@ -51,9 +51,9 @@ func NewClient(siteName string) *Client {
 	}
 }
 
-// newClientDirect constructs a Client with explicit connection parameters.
+// NewClientDirect constructs a Client with explicit connection parameters.
 // Used in tests and offline DB fallback scenarios.
-func newClientDirect(apiURL, token, dbPath string) *Client {
+func NewClientDirect(apiURL, token, dbPath string) *Client {
 	if apiURL == "" {
 		apiURL = "http://127.0.0.1:9090"
 	}
@@ -407,6 +407,70 @@ func (c *Client) StreamLogs(ctx context.Context, routeFilter string, handler fun
 				if strings.HasPrefix(l, "data: ") {
 					dataJSON := strings.TrimPrefix(l, "data: ")
 					var ev api.LogEvent
+					if jsonErr := json.Unmarshal([]byte(dataJSON), &ev); jsonErr == nil && !ev.Timestamp.IsZero() {
+						handler(ev)
+					}
+				}
+			}
+		}
+
+		if err != nil {
+			if err == io.EOF || ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+// StreamSystemLogs connects to the daemon SSE system log endpoint and streams SystemLogEvents to handler until ctx is cancelled.
+func (c *Client) StreamSystemLogs(ctx context.Context, handler func(event api.SystemLogEvent)) error {
+	urlStr := fmt.Sprintf("%s/api/v1/logs/system", c.BaseURL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return err
+	}
+
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("unauthorized: missing or invalid API token")
+	}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("stream error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	buf := make([]byte, 4096)
+	var lineAcc string
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			lineAcc += string(buf[:n])
+			lines := strings.Split(lineAcc, "\n")
+			lineAcc = lines[len(lines)-1]
+
+			for _, l := range lines[:len(lines)-1] {
+				l = strings.TrimSpace(l)
+				if strings.HasPrefix(l, "data: ") {
+					dataJSON := strings.TrimPrefix(l, "data: ")
+					var ev api.SystemLogEvent
 					if jsonErr := json.Unmarshal([]byte(dataJSON), &ev); jsonErr == nil && !ev.Timestamp.IsZero() {
 						handler(ev)
 					}

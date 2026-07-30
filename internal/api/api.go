@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"runtime"
@@ -68,33 +67,13 @@ func New(gw *gateway.Gateway, db *sql.DB, fw firewall.Manager, isPublic bool) (*
 		return nil, fmt.Errorf("failed to rehydrate state from db: %w", err)
 	}
 
-	// Wire gateway log events into the SSE broadcaster.
+	// Wire gateway and firewall system loggers into the SSE broadcasters.
+	gateway.SystemLogger = LogSystem
+	firewall.Logger = func(level, format string, args ...any) {
+		LogSystem(level, "FIREWALL", format, args...)
+	}
 	gw.OnLogEvent = func(event gateway.LogEvent) {
-		var mc *MinecraftInfoSpec
-		if event.MinecraftInfo != nil {
-			mc = &MinecraftInfoSpec{
-				RequestedHost:   event.MinecraftInfo.RequestedHost,
-				RequestedPort:   event.MinecraftInfo.RequestedPort,
-				ProtocolState:   event.MinecraftInfo.ProtocolState,
-				ProtocolVersion: event.MinecraftInfo.ProtocolVersion,
-				Username:        event.MinecraftInfo.Username,
-				IsLoginStart:    event.MinecraftInfo.IsLoginStart,
-			}
-		}
-		apiEvent := LogEvent{
-			Timestamp:     event.Timestamp,
-			Protocol:      event.Protocol,
-			Route:         event.Route,
-			Listener:      event.Listener,
-			Method:        event.Method,
-			Path:          event.Path,
-			Status:        event.Status,
-			DurationMs:    event.DurationMs,
-			RemoteIP:      event.RemoteIP,
-			Error:         event.Error,
-			MinecraftInfo: mc,
-		}
-		DefaultLogBroadcaster.Broadcast(apiEvent)
+		DefaultLogBroadcaster.Broadcast(event)
 	}
 
 	return api, nil
@@ -183,13 +162,13 @@ func (a *API) rehydrate() error {
 
 		var spec ListenerSpec
 		if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
-			log.Printf("api rehydrate: failed to unmarshal listener %s: %v\n", name, err)
+			LogWarn("API", "rehydrate: failed to unmarshal listener %s: %v", name, err)
 			continue
 		}
 
 		tlsHandler, err := buildTLSHandler(spec.TLS)
 		if err != nil {
-			log.Printf("api rehydrate: failed to build TLS handler for listener %s: %v\n", name, err)
+			LogWarn("API", "rehydrate: failed to build TLS handler for listener %s: %v", name, err)
 		}
 
 		gwListener := gateway.Listener{
@@ -200,7 +179,9 @@ func (a *API) rehydrate() error {
 		}
 
 		if err := a.gw.AddListener(gwListener); err != nil {
-			log.Printf("[WARNING] Listener %s (%s/%s) failed to bind: %v\n", spec.Name, spec.Address, spec.Protocol, err)
+			LogWarn("LISTENER", "listener %s (%s/%s) failed to bind: %v", spec.Name, spec.Address, spec.Protocol, err)
+		} else {
+			LogInfo("LISTENER", "bound listener %s on %s (%s)", spec.Name, spec.Address, spec.Protocol)
 		}
 
 		// Ensure firewall port is opened
@@ -234,26 +215,31 @@ func (a *API) rehydrate() error {
 
 		var spec RouteSpec
 		if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
-			log.Printf("api rehydrate: failed to unmarshal route %s: %v\n", name, err)
+			LogWarn("API", "rehydrate: failed to unmarshal route %s: %v", name, err)
 			continue
 		}
 
 		// Check if referenced listener exists
 		if _, exists := a.listeners[spec.Listener]; !exists {
-			log.Printf("api rehydrate: skipping route %s because listener %s does not exist\n", spec.Name, spec.Listener)
+			LogWarn("API", "rehydrate: skipping route %s because listener %s does not exist", spec.Name, spec.Listener)
 			continue
 		}
 
 		if err := a.addRouteToGateway(spec); err != nil {
-			log.Printf("api rehydrate: failed to load route %s: %v\n", spec.Name, err)
-		} else if spec.TTL > 0 {
-			rName := spec.Name
-			a.routeTimers[rName] = time.AfterFunc(time.Duration(spec.TTL)*time.Second, func() {
-				a.deleteRouteByName(rName)
-			})
+			LogWarn("API", "rehydrate: failed to load route %s: %v", spec.Name, err)
+		} else {
+			LogInfo("ROUTE", "loaded route %s on listener %s", spec.Name, spec.Listener)
+			if spec.TTL > 0 {
+				rName := spec.Name
+				a.routeTimers[rName] = time.AfterFunc(time.Duration(spec.TTL)*time.Second, func() {
+					LogInfo("ROUTE", "route %s TTL expired, auto-deleting", rName)
+					a.deleteRouteByName(rName)
+				})
+			}
 		}
 	}
 
+	LogInfo("API", "rehydrated %d listeners and %d routes from database", len(a.listeners), len(a.routes))
 	return nil
 }
 
@@ -355,12 +341,14 @@ func NewHandler(api *API) http.Handler {
 			authHeader := r.Header.Get("Authorization")
 			token := strings.TrimPrefix(authHeader, "Bearer ")
 			if token == "" || authHeader == token {
+				LogWarn("API", "unauthorized API request from %s (error: missing or malformed bearer token)", r.RemoteAddr)
 				writeError(w, http.StatusUnauthorized, "unauthorized: missing or malformed bearer token")
 				return
 			}
 
 			valid, err := ValidateToken(api.db, token)
 			if err != nil || !valid {
+				LogWarn("API", "unauthorized API request from %s (error: invalid bearer token)", r.RemoteAddr)
 				writeError(w, http.StatusUnauthorized, "unauthorized: invalid token")
 				return
 			}
@@ -382,8 +370,22 @@ func NewHandler(api *API) http.Handler {
 	mux.HandleFunc("PUT /api/v1/routes/{name}", auth(api.handleUpdateRoute))
 	mux.HandleFunc("DELETE /api/v1/routes/{name}", auth(api.handleDeleteRoute))
 
-	// Log streaming endpoint
+	// Serve endpoints for web apps, web UI dashboards, cURL, and remote clients
+	mux.HandleFunc("GET /api/v1/serve", auth(api.handleListServeMounts))
+	mux.HandleFunc("GET /api/v1/serve/{name}", auth(api.handleGetServeMount))
+	mux.HandleFunc("POST /api/v1/serve/http", auth(api.handleServeHTTP))
+	mux.HandleFunc("POST /api/v1/serve/https", auth(api.handleServeHTTPS))
+	mux.HandleFunc("POST /api/v1/serve/static", auth(api.handleServeStatic))
+	mux.HandleFunc("POST /api/v1/serve/redirect", auth(api.handleServeRedirect))
+	mux.HandleFunc("POST /api/v1/serve/tcp", auth(api.handleServeTCP))
+	mux.HandleFunc("POST /api/v1/serve/udp", auth(api.handleServeUDP))
+	mux.HandleFunc("POST /api/v1/serve/minecraft", auth(api.handleServeMinecraft))
+	mux.HandleFunc("DELETE /api/v1/serve/{name}", auth(api.handleServeDelete))
+	mux.HandleFunc("POST /api/v1/serve/reset", auth(api.handleServeReset))
+
+	// Log streaming endpoints
 	mux.HandleFunc("GET /api/v1/logs/stream", auth(api.handleStreamLogs))
+	mux.HandleFunc("GET /api/v1/logs/system", auth(api.handleStreamSystemLogs))
 
 	return mux
 }
@@ -819,11 +821,116 @@ func (a *API) handleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleDeleteRoute(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if err := a.deleteRouteByName(name); err != nil {
+	if err := a.DeleteRoute(name); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": fmt.Sprintf("route %s deleted", name)})
+}
+
+// AddListener registers and persists a ListenerSpec on the API instance.
+func (a *API) AddListener(spec ListenerSpec) error {
+	if spec.Name == "" || spec.Address == "" || (spec.Protocol != "tcp" && spec.Protocol != "udp") {
+		return fmt.Errorf("listener name, address, and protocol (tcp|udp) are required")
+	}
+
+	port, err := firewall.ParsePort(spec.Address)
+	if err != nil {
+		return fmt.Errorf("invalid listener address: %w", err)
+	}
+
+	tlsHandler, err := buildTLSHandler(spec.TLS)
+	if err != nil {
+		return fmt.Errorf("invalid TLS config: %w", err)
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if _, exists := a.listeners[spec.Name]; exists {
+		return fmt.Errorf("listener %s already exists", spec.Name)
+	}
+
+	gwListener := gateway.Listener{
+		Name:       spec.Name,
+		Address:    spec.Address,
+		Protocol:   gateway.Protocol(spec.Protocol),
+		TLSHandler: tlsHandler,
+	}
+
+	if err := a.gw.AddListener(gwListener); err != nil {
+		return err
+	}
+
+	if err := a.fw.OpenPort(spec.Protocol, port); err != nil {
+		_ = a.gw.RemoveListener(spec.Name)
+		return fmt.Errorf("failed to open firewall port: %w", err)
+	}
+
+	specJSON, _ := json.Marshal(spec)
+	if _, err := a.db.Exec("INSERT INTO listeners (name, spec) VALUES (?, ?)", spec.Name, string(specJSON)); err != nil {
+		_ = a.fw.ClosePort(spec.Protocol, port)
+		_ = a.gw.RemoveListener(spec.Name)
+		return fmt.Errorf("failed to persist listener to database: %w", err)
+	}
+
+	if spec.TTL > 0 {
+		lName := spec.Name
+		a.listenerTimers[lName] = time.AfterFunc(time.Duration(spec.TTL)*time.Second, func() {
+			a.DeleteListener(lName)
+		})
+	}
+
+	a.listeners[spec.Name] = spec
+	return nil
+}
+
+// AddRoute registers and persists a RouteSpec on the API instance.
+func (a *API) AddRoute(spec RouteSpec) error {
+	if spec.Name == "" || spec.Listener == "" || spec.Protocol == "" {
+		return fmt.Errorf("route name, listener, and protocol are required")
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if _, exists := a.routes[spec.Name]; exists {
+		return fmt.Errorf("route %s already exists", spec.Name)
+	}
+
+	if _, listenerExists := a.listeners[spec.Listener]; !listenerExists {
+		return fmt.Errorf("listener %s does not exist", spec.Listener)
+	}
+
+	if err := a.addRouteToGateway(spec); err != nil {
+		return err
+	}
+
+	specJSON, _ := json.Marshal(spec)
+	if _, err := a.db.Exec("INSERT INTO routes (name, spec) VALUES (?, ?)", spec.Name, string(specJSON)); err != nil {
+		a.removeRouteFromGateway(spec.Protocol, spec.Name)
+		delete(a.routes, spec.Name)
+		return fmt.Errorf("failed to persist route to database: %w", err)
+	}
+
+	if spec.TTL > 0 {
+		rName := spec.Name
+		a.routeTimers[rName] = time.AfterFunc(time.Duration(spec.TTL)*time.Second, func() {
+			a.DeleteRoute(rName)
+		})
+	}
+
+	return nil
+}
+
+// DeleteRoute deletes a route by name.
+func (a *API) DeleteRoute(name string) error {
+	return a.deleteRouteByName(name)
+}
+
+// DeleteListener deletes a listener by name.
+func (a *API) DeleteListener(name string) error {
+	return a.deleteListenerByName(name)
 }
 
 func (a *API) deleteRouteByName(name string) error {

@@ -42,6 +42,16 @@ func (s *tcpListenerState) unregisterConn(route string, conn net.Conn) {
 	}
 }
 
+func (s *tcpListenerState) connCount() int {
+	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	total := 0
+	for _, m := range s.conns {
+		total += len(m)
+	}
+	return total
+}
+
 func (s *tcpListenerState) closeRoute(route string) {
 	s.connsMu.Lock()
 	bucket := s.conns[route]

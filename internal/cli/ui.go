@@ -203,3 +203,60 @@ func (t *Table) String() string {
 	t.Render(&sb)
 	return sb.String()
 }
+
+func extractBoolFlag(args []string, names ...string) ([]string, bool) {
+	allowed := make(map[string]bool, len(names)*2)
+	for _, n := range names {
+		allowed["-"+n] = true
+		allowed["--"+n] = true
+	}
+	var out []string
+	found := false
+	for _, a := range args {
+		if allowed[a] {
+			found = true
+		} else {
+			out = append(out, a)
+		}
+	}
+	return out, found
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, a := range args {
+		if a == "-h" || a == "--help" || a == "-help" {
+			return true
+		}
+	}
+	return false
+}
+
+func httpStatusText(code int) string {
+	switch code {
+	case 200:
+		return "OK"
+	case 201:
+		return "Created"
+	case 204:
+		return "No Content"
+	case 301:
+		return "Moved Permanently"
+	case 302:
+		return "Found"
+	case 400:
+		return "Bad Request"
+	case 401:
+		return "Unauthorized"
+	case 403:
+		return "Forbidden"
+	case 404:
+		return "Not Found"
+	case 500:
+		return "Internal Server Error"
+	case 502:
+		return "Bad Gateway"
+	default:
+		return ""
+	}
+}
+

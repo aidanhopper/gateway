@@ -2,7 +2,6 @@ package firewall
 
 import (
 	"fmt"
-	"log"
 	"os/exec"
 	"strings"
 )
@@ -33,10 +32,11 @@ func (m *OSCommandManager) OpenPort(protocol string, port int) error {
 
 	out, err := execFn(bin, args...)
 	if err != nil {
+		logFirewall("ERROR", "%s open port %s/%d failed: %v (output: %s)", strings.ToUpper(m.Name), protocol, port, err, string(out))
 		return fmt.Errorf("%s open port %s/%d failed: %v (output: %s)", m.Name, protocol, port, err, string(out))
 	}
 
-	log.Printf("[FIREWALL %s] Opened %s port %d\n", strings.ToUpper(m.Name), protocol, port)
+	logFirewall("INFO", "%s opened %s port %d", strings.ToUpper(m.Name), protocol, port)
 	return nil
 }
 
@@ -50,10 +50,11 @@ func (m *OSCommandManager) ClosePort(protocol string, port int) error {
 
 	out, err := execFn(bin, args...)
 	if err != nil {
+		logFirewall("ERROR", "%s close port %s/%d failed: %v (output: %s)", strings.ToUpper(m.Name), protocol, port, err, string(out))
 		return fmt.Errorf("%s close port %s/%d failed: %v (output: %s)", m.Name, protocol, port, err, string(out))
 	}
 
-	log.Printf("[FIREWALL %s] Closed %s port %d\n", strings.ToUpper(m.Name), protocol, port)
+	logFirewall("INFO", "%s closed %s port %d", strings.ToUpper(m.Name), protocol, port)
 	return nil
 }
 
