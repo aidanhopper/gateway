@@ -6,8 +6,7 @@ Documentation=https://github.com/aidanhopper/gateway
 
 [Service]
 Type=simple
-User=root
-ExecStart=/usr/local/bin/gateway daemon --config /etc/gateway/server.yaml
+ExecStart=/usr/local/bin/gateway daemon
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536

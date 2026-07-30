@@ -57,8 +57,8 @@ func PromptInput(prompt string) string {
 
 // loadServerDefaults loads the server config file + env vars and returns
 // resolved defaults for use as flag default values in RunDaemon.
-func loadServerDefaults() *config.ServerConfig {
-	cfg, err := config.LoadServerConfig()
+func loadServerDefaults(customPath string) *config.ServerConfig {
+	cfg, err := config.LoadServerConfigFromPath(customPath)
 	if err != nil {
 		log.Printf("[WARNING] Could not load server config: %v", err)
 		cfg = &config.ServerConfig{}
@@ -151,10 +151,27 @@ func (c *Client) ConfirmPublicSiteExposure(yesFlag bool, targetDesc string) bool
 
 // RunDaemon starts the Gateway network proxy engine and REST API server.
 func RunDaemon(args []string) {
+	// Pre-scan args for optional custom config file flag
+	customConfigPath := ""
+	for i, arg := range args {
+		if (arg == "--config" || arg == "-config" || arg == "-c" || arg == "--c") && i+1 < len(args) {
+			customConfigPath = args[i+1]
+			break
+		} else if strings.HasPrefix(arg, "--config=") || strings.HasPrefix(arg, "-config=") {
+			customConfigPath = strings.SplitN(arg, "=", 2)[1]
+			break
+		} else if strings.HasPrefix(arg, "-c=") || strings.HasPrefix(arg, "--c=") {
+			customConfigPath = strings.SplitN(arg, "=", 2)[1]
+			break
+		}
+	}
+
 	// Load server config file + env vars first; CLI flags override.
-	defaults := loadServerDefaults()
+	defaults := loadServerDefaults(customConfigPath)
 
 	fs := flag.NewFlagSet("daemon", flag.ExitOnError)
+	configPath := fs.String("config", customConfigPath, "Path to server configuration file")
+	fs.StringVar(configPath, "c", customConfigPath, "Path to server configuration file (shorthand)")
 	dbPath := fs.String("db", defaults.DB, "Path to SQLite database file")
 	addr := fs.String("addr", defaults.Addr, "REST API listen address")
 	fwDriver := fs.String("firewall", defaults.Firewall, "Firewall driver (auto, dry, none, ufw, firewalld, nftables, iptables)")

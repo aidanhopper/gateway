@@ -155,10 +155,7 @@ Description=Gateway Reverse Proxy & Stream Routing Daemon
 After=network.target network-online.target
 Wants=network-online.target
 
-[Service]
-Type=simple
-User=root
-ExecStart=$INSTALL_BIN daemon --config $CONFIG_DIR/server.yaml
+ExecStart=$INSTALL_BIN daemon
 Restart=always
 RestartSec=5s
 LimitNOFILE=65536

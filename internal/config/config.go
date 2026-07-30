@@ -57,10 +57,35 @@ type ServerConfig struct {
 // serverConfigPaths returns candidate paths for the server config file,
 // in priority order (first found wins).
 func serverConfigPaths() []string {
-	return []string{
-		filepath.Join(ConfigDir(), "server.yaml"),
-		filepath.Join(ConfigDir(), "server.yml"),
+	paths := []string{
+		"/etc/gateway/server.yaml",
+		"/etc/gateway/server.yml",
 	}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths,
+			filepath.Join(home, ".config", "gateway", "server.yaml"),
+			filepath.Join(home, ".config", "gateway", "server.yml"),
+		)
+	}
+	return paths
+}
+
+// LoadServerConfigFromPath reads a server config file from a specific path
+// and merges in environment variable overrides.
+func LoadServerConfigFromPath(path string) (*ServerConfig, error) {
+	if path == "" {
+		return LoadServerConfig()
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading server config %s: %w", path, err)
+	}
+	cfg := &ServerConfig{}
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parsing server config %s: %w", path, err)
+	}
+	applyServerEnvOverrides(cfg)
+	return cfg, nil
 }
 
 // LoadServerConfig reads the server config file and merges in environment
@@ -83,7 +108,11 @@ func LoadServerConfig() (*ServerConfig, error) {
 		break
 	}
 
-	// Environment variables override file values
+	applyServerEnvOverrides(cfg)
+	return cfg, nil
+}
+
+func applyServerEnvOverrides(cfg *ServerConfig) {
 	if v := os.Getenv("GATEWAY_ADDR"); v != "" {
 		cfg.Addr = v
 	}
@@ -94,16 +123,12 @@ func LoadServerConfig() (*ServerConfig, error) {
 		cfg.Firewall = v
 	}
 	if v := os.Getenv("GATEWAY_PROTECTED_PORTS"); v != "" {
-		// Env var stays as comma-separated string; split into list for uniformity
 		cfg.ProtectedPorts = strings.Split(v, ",")
 	}
 	if v := os.Getenv("GATEWAY_PUBLIC"); v != "" {
 		cfg.Public = strings.EqualFold(v, "true") || v == "1"
 	}
-
-	return cfg, nil
 }
-
 
 // SiteProfile defines a named Gateway target server.
 type SiteProfile struct {
@@ -154,6 +179,12 @@ func StateDir() string {
 func DBPath() string {
 	if env := os.Getenv("GATEWAY_DB"); env != "" {
 		return env
+	}
+	if os.Getuid() == 0 {
+		return "/var/lib/gateway/gateway.db"
+	}
+	if fi, err := os.Stat("/var/lib/gateway"); err == nil && fi.IsDir() {
+		return "/var/lib/gateway/gateway.db"
 	}
 	return filepath.Join(DataDir(), "gateway.db")
 }
