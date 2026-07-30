@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aidanhopper/gateway/internal/api"
+	"github.com/aidanhopper/gateway/internal/config"
 )
 
 // HTTP mounts a local HTTP service programmatically and returns created route names.
@@ -128,9 +129,20 @@ func HTTPS(ctx context.Context, client GatewayClient, opts HTTPSOptions) ([]stri
 
 	useACME := opts.ACME
 	if domainVal != "" && !useACME {
-		dnsMatch, _, _ := ValidateDNS(domainVal)
+		checkDomain := strings.TrimPrefix(domainVal, "*.")
+		dnsMatch, resolvedIP, serverIP := ValidateDNS(checkDomain)
 		if dnsMatch {
+			fmt.Printf("[INFO] DNS for %s resolves to this server (%s). Enabling ACME Let's Encrypt auto-cert.\n", checkDomain, serverIP)
 			useACME = true
+		} else {
+			serverCfg, _ := config.LoadServerConfig()
+			hasCloudflareToken := (serverCfg != nil && serverCfg.ACMECloudflareToken != "") || os.Getenv("CLOUDFLARE_DNS_API_TOKEN") != "" || os.Getenv("CF_DNS_API_TOKEN") != ""
+			if hasCloudflareToken {
+				fmt.Printf("[INFO] Cloudflare DNS API token detected. Enabling ACME Let's Encrypt DNS-01 auto-cert for %s.\n", domainVal)
+				useACME = true
+			} else if resolvedIP != "" {
+				fmt.Printf("[INFO] DNS for %s points to %s (server IP: %s). Using local TLS until DNS propagates.\n", checkDomain, resolvedIP, serverIP)
+			}
 		}
 	}
 
