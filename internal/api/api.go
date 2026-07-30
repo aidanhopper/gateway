@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aidanhopper/gateway/internal/acme"
+	"github.com/aidanhopper/gateway/internal/config"
 	"github.com/aidanhopper/gateway/internal/firewall"
 	"github.com/aidanhopper/gateway/internal/gateway"
 )
