@@ -44,11 +44,11 @@ func TestValidateAndBuildHandlers(t *testing.T) {
 			t.Errorf("expected http.Handler interface")
 		}
 
-		hStatic, err := buildHandler("http", HandlerSpec{Type: "http_static", Config: map[string]any{"status": 201, "body": "CREATED_OK"}})
+		hRedirect, err := buildHandler("http", HandlerSpec{Type: "http_redirect", Config: map[string]any{"status": 302, "url": "https://example.com"}})
 		if err != nil {
-			t.Fatalf("buildHandler http_static failed: %v", err)
+			t.Fatalf("buildHandler http_redirect failed: %v", err)
 		}
-		handler, ok := hStatic.(http.Handler)
+		handler, ok := hRedirect.(http.Handler)
 		if !ok {
 			t.Fatalf("expected http.Handler")
 		}
@@ -57,8 +57,8 @@ func TestValidateAndBuildHandlers(t *testing.T) {
 		req := httptest.NewRequest("GET", "/", nil)
 		handler.ServeHTTP(rec, req)
 
-		if rec.Code != 201 || rec.Body.String() != "CREATED_OK" {
-			t.Errorf("got code %d, body %q, want 201 'CREATED_OK'", rec.Code, rec.Body.String())
+		if rec.Code != 301 || rec.Header().Get("Location") != "https://example.com/" {
+			t.Errorf("got status %d header %q, want 301 https://example.com/", rec.Code, rec.Header().Get("Location"))
 		}
 	})
 

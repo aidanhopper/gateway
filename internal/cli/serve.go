@@ -20,9 +20,6 @@ import (
 func PrintServeUsage() {
 	fmt.Println("Usage: gateway serve <protocol|subcommand> [args] [flags]")
 	fmt.Println("\nProtocols:")
-	fmt.Println("  dir (static) <domain/path> <folder|file>   Expose local folder/file")
-	fmt.Println("  file <domain/path> <file>                  Expose single static file")
-	fmt.Println("  spa <domain/path> <folder>                 Expose Single Page App with index.html fallback")
 	fmt.Println("  redirect (redir) <domain/path> <target-url> Redirect HTTP/HTTPS traffic to external URL")
 	fmt.Println("  http <path> <target>                       Expose local HTTP service (e.g. gateway serve http / 3000)")
 	fmt.Println("  https <path> <target>                      Expose local service over HTTPS (e.g. gateway serve https / 3000 --acme)")
@@ -201,12 +198,6 @@ func RunServe(args []string) {
 	}
 
 	switch subcmd {
-	case "dir", "static", "spa", "file":
-		runArgs := args[1:]
-		if durationPreset != "" {
-			runArgs = append(runArgs, "--ttl", durationPreset)
-		}
-		runServeDir(ctx, client, runArgs, subcmd == "spa", yesMode)
 	case "redirect", "redir":
 		runArgs := args[1:]
 		if durationPreset != "" {
@@ -543,79 +534,6 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMo
 	})
 	if err != nil {
 		log.Fatalf("failed to serve minecraft: %v", err)
-	}
-
-	if watchMode && len(routes) > 0 {
-		WatchAndCleanup(client, routes...)
-	}
-}
-
-func runServeDir(ctx context.Context, client *Client, args []string, defaultSPA bool, yesMode bool) {
-	args, watchMode := ExtractWatchAndBGFlags(args)
-
-	fs := flag.NewFlagSet("serve dir", flag.ExitOnError)
-	spa := fs.Bool("spa", defaultSPA, "Enable SPA (Single Page App) routing fallback to index.html")
-	index := fs.String("index", "index.html", "Default index file name")
-	browse := fs.Bool("browse", false, "Enable directory browsing")
-	httpFlag := fs.Bool("http", false, "Serve static directory over unencrypted HTTP instead of HTTPS")
-	_ = fs.Bool("https", true, "Serve static directory over HTTPS (default)")
-	ttlStr := fs.String("ttl", "", "Time to live duration")
-	listenerName := fs.String("listener", "", "Listener name")
-	listenAddr := fs.String("listen", "", "Listen address")
-	domain := fs.String("domain", "", "TLS Domain name")
-	acme := fs.Bool("acme", false, "Enable automatic Let's Encrypt TLS cert")
-	certFile := fs.String("cert", "", "Path to PEM certificate")
-	keyFile := fs.String("key", "", "Path to PEM private key")
-	stripPrefix := fs.String("strip-prefix", "", "Strip path prefix before serving files")
-	noStripPrefix := fs.Bool("no-strip-prefix", false, "Do not automatically strip path prefix when serving files")
-	noRedirect := fs.Bool("no-redirect", false, "Do not automatically create HTTP to HTTPS redirect route on port 80")
-	_ = fs.Bool("bg", false, "Run in background mode")
-	_ = fs.Bool("d", false, "Run in background mode")
-
-	if hasHelpFlag(args) {
-		fmt.Println("Usage: gateway serve dir <domain/path> <local-dir> [flags]")
-		fs.PrintDefaults()
-		os.Exit(0)
-	}
-
-	_ = fs.Parse(args)
-	if fs.NArg() < 1 {
-		fmt.Println("Usage: gateway serve dir <domain/path> <local-dir> [flags]")
-		os.Exit(0)
-	}
-
-	dirPath := "."
-	if fs.NArg() >= 2 {
-		dirPath = fs.Arg(1)
-	}
-
-	ttlDuration, err := ParseTTL(*ttlStr)
-	if err != nil {
-		log.Fatalf("invalid ttl: %v", err)
-	}
-
-	routes, err := serve.Dir(ctx, client, serve.DirOptions{
-		Mount:         fs.Arg(0),
-		LocalPath:     dirPath,
-		IsSPA:         *spa,
-		IsHTTP:        *httpFlag,
-		Index:         *index,
-		Browse:        *browse,
-		ListenAddr:    *listenAddr,
-		ListenerName:  *listenerName,
-		Domain:        *domain,
-		ACME:          *acme,
-		CertFile:      *certFile,
-		KeyFile:       *keyFile,
-		StripPrefix:   *stripPrefix,
-		NoStripPrefix: *noStripPrefix,
-		NoRedirect:    *noRedirect,
-		TTL:           ttlDuration,
-		Background:    !watchMode,
-		Yes:           yesMode,
-	})
-	if err != nil {
-		log.Fatalf("failed to serve dir: %v", err)
 	}
 
 	if watchMode && len(routes) > 0 {

@@ -91,7 +91,7 @@ func TestHandlerRegistryCustomRegistration(t *testing.T) {
 
 func TestNestedHandlerComposition(t *testing.T) {
 	registry := NewHandlerRegistry()
-	registry.Register("http_static", HTTPStaticFactory{})
+	registry.Register("http_redirect", HTTPRedirectFactory{})
 	registry.Register("http_decorator", httpHeaderDecoratorFactory{})
 
 	nestedSpec := HandlerSpec{
@@ -101,10 +101,10 @@ func TestNestedHandlerComposition(t *testing.T) {
 			"value":  "gateway-test",
 		},
 		Next: &HandlerSpec{
-			Type: "http_static",
+			Type: "http_redirect",
 			Config: map[string]any{
-				"status": 200,
-				"body":   "INNER_STATIC_BODY",
+				"status": 302,
+				"url":    "https://example.com",
 			},
 		},
 	}
@@ -123,12 +123,12 @@ func TestNestedHandlerComposition(t *testing.T) {
 	req := httptest.NewRequest("GET", "/", nil)
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != 200 {
-		t.Errorf("got status %d, want 200", rec.Code)
+	if rec.Code != 301 {
+		t.Errorf("got status %d, want 301", rec.Code)
 	}
 
-	if rec.Body.String() != "INNER_STATIC_BODY" {
-		t.Errorf("got body %q, want 'INNER_STATIC_BODY'", rec.Body.String())
+	if rec.Header().Get("Location") != "https://example.com/" {
+		t.Errorf("got Location header %q, want 'https://example.com/'", rec.Header().Get("Location"))
 	}
 
 	if rec.Header().Get("X-Decorated-By") != "gateway-test" {

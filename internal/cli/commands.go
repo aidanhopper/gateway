@@ -87,7 +87,7 @@ func PrintUsage() {
 	fmt.Println("  status (stat)             DisplayTailscale-style status overview of daemon, listeners, and routes")
 	fmt.Println("  logs (log)                Stream live logs for active proxy routes")
 	fmt.Printf("\n%s\n", ColorBold("Service Exposure:"))
-	fmt.Println("  serve (s)                 Expose local services (http, https, dir, static, file, spa, tcp, udp, mc)")
+	fmt.Println("  serve (s)                 Expose local services (http, https, tcp, udp, mc, redirect)")
 	fmt.Println("                            Example: gateway serve app.domain.com 3000 --1h")
 	fmt.Printf("\n%s\n", ColorBold("Site Management:"))
 	fmt.Println("  site (sites)              Manage target Gateway sites (list, use, ping)")
@@ -245,18 +245,26 @@ func RunToken(subcmd string, args []string) {
 	case "create", "add", "new":
 		name := fs.String("name", "", "Human-readable label for the token")
 		_ = fs.Parse(args)
+		tokenName := *name
+		if tokenName == "" && fs.NArg() > 0 {
+			tokenName = fs.Arg(0)
+		}
 
 		client := NewClient(siteName)
 		if !ConfirmPublicSiteExposure(client, yesMode, "API token creation") {
 			return
 		}
 
-		id, token, err := client.CreateToken(ctx, *name)
+		id, token, err := client.CreateToken(ctx, tokenName)
 		if err != nil {
+			if strings.Contains(err.Error(), "readonly database") || strings.Contains(err.Error(), "permission denied") {
+				fmt.Fprintf(os.Stderr, "[ERROR] Permission denied writing to database at %s.\n", client.DBPath)
+				fmt.Fprintf(os.Stderr, "[INFO] Please run with sudo: sudo gateway token create %s\n", tokenName)
+				os.Exit(1)
+			}
 			log.Fatalf("failed to create token: %v", err)
 		}
-		fmt.Printf("Created token %q (ID: %s) in local daemon DB (%s)\nToken: %s\n", *name, id, client.DBPath, token)
-		fmt.Printf("\n%s\n", ColorBold(ColorCyan("[NEXT STEPS]")))
+		fmt.Printf("[SUCCESS] Created token %q (ID: %s) in local daemon DB (%s)\nToken: %s\n", tokenName, id, client.DBPath, token)
 		fmt.Printf("  Export token:  export GATEWAY_API_TOKEN=%q\n", token)
 		fmt.Println("  List tokens:   gateway tokens list")
 

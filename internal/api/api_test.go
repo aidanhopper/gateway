@@ -205,7 +205,7 @@ func TestRouteCRUDAndCascadeDelete(t *testing.T) {
 	handler := NewHandler(api)
 
 	// 1. Create Route without Listener -> 400 Bad Request
-	routeNoListenerJSON := `{"name":"r1","protocol":"http","listener":"nonexistent","priority":1,"rule":{"type":"any"},"handler":{"type":"http_static","config":{"body":"OK"}}}`
+	routeNoListenerJSON := `{"name":"r1","protocol":"http","listener":"nonexistent","priority":1,"rule":{"type":"any"},"handler":{"type":"http_redirect","config":{"url":"https://example.com"}}}`
 	req := httptest.NewRequest("POST", "/api/v1/routes", bytes.NewBufferString(routeNoListenerJSON))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
@@ -225,7 +225,7 @@ func TestRouteCRUDAndCascadeDelete(t *testing.T) {
 	}
 
 	// 3. Create Valid HTTP Route
-	routeJSON := `{"name":"r1","protocol":"http","listener":"web","priority":1,"rule":{"type":"path_prefix","value":"/api"},"handler":{"type":"http_static","config":{"status":200,"body":"HELLO_API"}}}`
+	routeJSON := `{"name":"r1","protocol":"http","listener":"web","priority":1,"rule":{"type":"path_prefix","value":"/api"},"handler":{"type":"http_redirect","config":{"url":"https://example.com"}}}`
 	req = httptest.NewRequest("POST", "/api/v1/routes", bytes.NewBufferString(routeJSON))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
@@ -400,8 +400,13 @@ func TestStaticTLSTermination(t *testing.T) {
 		t.Fatalf("POST TLS listener failed: %d body: %s", rec.Code, rec.Body.String())
 	}
 
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("TLS_SUCCESS"))
+	}))
+	defer backend.Close()
+
 	// 2. Add HTTP Route to the TLS listener
-	routeJSON := `{"name":"https-route","protocol":"http","listener":"tls-ln","priority":1,"rule":{"type":"path_prefix","value":"/secure"},"handler":{"type":"http_static","config":{"status":200,"body":"TLS_SUCCESS"}}}`
+	routeJSON := fmt.Sprintf(`{"name":"https-route","protocol":"http","listener":"tls-ln","priority":1,"rule":{"type":"path_prefix","value":"/secure"},"handler":{"type":"http_proxy","config":{"target":%q}}}`, backend.URL)
 	req = httptest.NewRequest("POST", "/api/v1/routes", bytes.NewBufferString(routeJSON))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
@@ -532,8 +537,13 @@ func TestE2ENetworkRoutingViaAPI(t *testing.T) {
 		t.Fatalf("POST listener failed: %d body: %s", rec.Code, rec.Body.String())
 	}
 
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("API_E2E_SUCCESS"))
+	}))
+	defer backend.Close()
+
 	// 2. Create HTTP Route via API
-	routeJSON := `{"name":"http-e2e","protocol":"http","listener":"e2e-ln","priority":1,"rule":{"type":"path_prefix","value":"/hello"},"handler":{"type":"http_static","config":{"status":200,"body":"API_E2E_SUCCESS"}}}`
+	routeJSON := fmt.Sprintf(`{"name":"http-e2e","protocol":"http","listener":"e2e-ln","priority":1,"rule":{"type":"path_prefix","value":"/hello"},"handler":{"type":"http_proxy","config":{"target":%q}}}`, backend.URL)
 	req = httptest.NewRequest("POST", "/api/v1/routes", bytes.NewBufferString(routeJSON))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()

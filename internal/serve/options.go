@@ -51,29 +51,6 @@ type MinecraftOptions struct {
 	Yes        bool          `json:"yes,omitempty"`
 }
 
-// DirOptions configures a static directory, file, or SPA serve mount.
-type DirOptions struct {
-	Mount         string        `json:"mount"`
-	LocalPath     string        `json:"local_path"`
-	IsSPA         bool          `json:"is_spa,omitempty"`
-	IsFile        bool          `json:"is_file,omitempty"`
-	IsHTTP        bool          `json:"is_http,omitempty"`
-	Index         string        `json:"index,omitempty"`
-	Browse        bool          `json:"browse,omitempty"`
-	ListenAddr    string        `json:"listen_addr,omitempty"`
-	ListenerName  string        `json:"listener_name,omitempty"`
-	Domain        string        `json:"domain,omitempty"`
-	ACME          bool          `json:"acme,omitempty"`
-	CertFile      string        `json:"cert_file,omitempty"`
-	KeyFile       string        `json:"key_file,omitempty"`
-	StripPrefix   string        `json:"strip_prefix,omitempty"`
-	NoStripPrefix bool          `json:"no_strip_prefix,omitempty"`
-	NoRedirect    bool          `json:"no_redirect,omitempty"`
-	TTL           time.Duration `json:"ttl,omitempty"`
-	Background    bool          `json:"background,omitempty"`
-	Yes           bool          `json:"yes,omitempty"`
-}
-
 // RedirectOptions configures an HTTP/HTTPS redirect serve mount.
 type RedirectOptions struct {
 	Mount      string        `json:"mount"`
