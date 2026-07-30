@@ -43,15 +43,46 @@ func (s *StringOrList) UnmarshalYAML(value *yaml.Node) error {
 	return fmt.Errorf("protected_ports must be a string or list of strings")
 }
 
-// ServerConfig holds configuration for the gateway daemon process.
-// It is read from ~/.config/gateway/server.yaml at startup. CLI flags and
-// environment variables take precedence over file values.
 type ServerConfig struct {
 	Addr           string       `yaml:"addr"`
 	DB             string       `yaml:"db"`
+	Database       string       `yaml:"database"`
 	Firewall       string       `yaml:"firewall"`
 	ProtectedPorts StringOrList `yaml:"protected_ports"`
 	Public         bool         `yaml:"public"`
+
+	APISection struct {
+		Listen string `yaml:"listen"`
+	} `yaml:"api"`
+
+	FirewallSection struct {
+		Driver         string       `yaml:"driver"`
+		ProtectedPorts StringOrList `yaml:"protected_ports"`
+	} `yaml:"firewall"`
+
+	LogSection struct {
+		Level string `yaml:"level"`
+	} `yaml:"log"`
+}
+
+func parseServerConfigData(data []byte) (*ServerConfig, error) {
+	cfg := &ServerConfig{}
+	if err := yaml.Unmarshal(data, cfg); err != nil {
+		return nil, err
+	}
+	if cfg.Addr == "" && cfg.APISection.Listen != "" {
+		cfg.Addr = cfg.APISection.Listen
+	}
+	if cfg.DB == "" && cfg.Database != "" {
+		cfg.DB = cfg.Database
+	}
+	if cfg.FirewallSection.Driver != "" {
+		cfg.Firewall = cfg.FirewallSection.Driver
+	}
+	if len(cfg.FirewallSection.ProtectedPorts) > 0 {
+		cfg.ProtectedPorts = cfg.FirewallSection.ProtectedPorts
+	}
+	return cfg, nil
 }
 
 // serverConfigPaths returns candidate paths for the server config file,
@@ -80,8 +111,8 @@ func LoadServerConfigFromPath(path string) (*ServerConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading server config %s: %w", path, err)
 	}
-	cfg := &ServerConfig{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
+	cfg, err := parseServerConfigData(data)
+	if err != nil {
 		return nil, fmt.Errorf("parsing server config %s: %w", path, err)
 	}
 	applyServerEnvOverrides(cfg)
@@ -102,9 +133,11 @@ func LoadServerConfig() (*ServerConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading server config %s: %w", p, err)
 		}
-		if err := yaml.Unmarshal(data, cfg); err != nil {
+		parsedCfg, err := parseServerConfigData(data)
+		if err != nil {
 			return nil, fmt.Errorf("parsing server config %s: %w", p, err)
 		}
+		cfg = parsedCfg
 		break
 	}
 
