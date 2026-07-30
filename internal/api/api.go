@@ -87,18 +87,7 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 
 	devCert, _ := acme.GenerateSelfSignedCert(spec.Domains)
 
-	shouldTryACME := spec.Auto
-	if !shouldTryACME && len(spec.Domains) > 0 {
-		for _, d := range spec.Domains {
-			dStr := strings.ToLower(strings.TrimSpace(d))
-			if dStr != "" && dStr != "localhost" && !strings.HasSuffix(dStr, ".localhost") && !strings.HasSuffix(dStr, ".local") && net.ParseIP(dStr) == nil {
-				shouldTryACME = true
-				break
-			}
-		}
-	}
-
-	if shouldTryACME {
+	if spec.Auto {
 		serverCfg, _ := config.LoadServerConfig()
 		acmeCfg := acme.Config{
 			Domains: spec.Domains,
