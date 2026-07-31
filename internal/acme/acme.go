@@ -287,10 +287,32 @@ func loadPrivateKey(path string) (*ecdsa.PrivateKey, error) {
 	return x509.ParseECPrivateKey(block.Bytes)
 }
 
+func isCertValid(cert *tls.Certificate) bool {
+	if cert == nil || len(cert.Certificate) == 0 {
+		return false
+	}
+	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return false
+	}
+	return time.Now().Add(30 * 24 * time.Hour).Before(x509Cert.NotAfter)
+}
+
 // ObtainWildcardCertificate requests a wildcard SAN certificate (*.domain and domain) via Lego DNS-01.
 func (m *Manager) ObtainWildcardCertificate(domain string) (*tls.Certificate, error) {
 	rootDomain := ExtractRootDomain(domain)
 	wildcardDomain := "*." + rootDomain
+
+	m.mu.RLock()
+	if existingCert, ok := m.certs[rootDomain]; ok && isCertValid(existingCert) {
+		m.mu.RUnlock()
+		return existingCert, nil
+	}
+	if existingCert, ok := m.certs[wildcardDomain]; ok && isCertValid(existingCert) {
+		m.mu.RUnlock()
+		return existingCert, nil
+	}
+	m.mu.RUnlock()
 
 	if err := m.ensureRegistered(); err != nil {
 		return nil, err

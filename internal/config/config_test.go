@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -74,5 +76,74 @@ func TestResolveSiteTokenPriority(t *testing.T) {
 	}
 	if profile.Token != "gw_testtoken123" {
 		t.Errorf("expected Token gw_testtoken123 from env, got %s", profile.Token)
+	}
+}
+
+func TestServerConfigPathsPriority(t *testing.T) {
+	tempXDG := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tempXDG)
+
+	paths := serverConfigPaths()
+	if len(paths) < 4 {
+		t.Fatalf("expected at least 4 candidate paths, got %d", len(paths))
+	}
+
+	expectedUserPath := filepath.Join(tempXDG, "gateway", "server.yaml")
+	if paths[0] != expectedUserPath {
+		t.Errorf("expected first priority path to be user config %s, got %s", expectedUserPath, paths[0])
+	}
+
+	if paths[2] != "/etc/gateway/server.yaml" {
+		t.Errorf("expected system path /etc/gateway/server.yaml at priority 2, got %s", paths[2])
+	}
+}
+
+func TestLoadServerConfigUserModeVsSystemMode(t *testing.T) {
+	tempXDG := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tempXDG)
+
+	userConfigDir := filepath.Join(tempXDG, "gateway")
+	if err := os.MkdirAll(userConfigDir, 0755); err != nil {
+		t.Fatalf("failed to create user config dir: %v", err)
+	}
+
+	userConfigContent := `
+api:
+  listen: "127.0.0.1:8888"
+database: "~/user_gateway.db"
+`
+	if err := os.WriteFile(filepath.Join(userConfigDir, "server.yaml"), []byte(userConfigContent), 0644); err != nil {
+		t.Fatalf("failed to write user config file: %v", err)
+	}
+
+	cfg, err := LoadServerConfig()
+	if err != nil {
+		t.Fatalf("LoadServerConfig failed in user mode: %v", err)
+	}
+
+	if cfg.Addr != "127.0.0.1:8888" {
+		t.Errorf("expected Addr 127.0.0.1:8888 from user config, got %s", cfg.Addr)
+	}
+}
+
+func TestDBPathUserVsEnvOverride(t *testing.T) {
+	// 1. Env override takes highest priority
+	tempDB := filepath.Join(t.TempDir(), "custom.db")
+	t.Setenv("GATEWAY_DB", tempDB)
+
+	if db := DBPath(); db != tempDB {
+		t.Errorf("expected DBPath %s from env GATEWAY_DB, got %s", tempDB, db)
+	}
+
+	// 2. XDG_DATA_HOME in non-root user mode
+	t.Setenv("GATEWAY_DB", "")
+	tempDataDir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tempDataDir)
+
+	expectedUserDB := filepath.Join(tempDataDir, "gateway", "gateway.db")
+	if os.Getuid() != 0 {
+		if db := DBPath(); db != expectedUserDB {
+			t.Errorf("expected DBPath %s in user mode, got %s", expectedUserDB, db)
+		}
 	}
 }
