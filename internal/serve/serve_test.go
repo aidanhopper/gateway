@@ -478,3 +478,123 @@ func TestServeRedirectCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestServeHTTPDeduplication(t *testing.T) {
+	server, client := setupServeMockServer(t)
+	defer server.Close()
+	ctx := context.Background()
+
+	routes1, err := HTTP(ctx, client, HTTPOptions{
+		Mount:  "app.com/api",
+		Target: "8080",
+		Yes:    true,
+	})
+	if err != nil || len(routes1) != 1 {
+		t.Fatalf("first HTTP call failed: err=%v routes=%v", err, routes1)
+	}
+
+	// Second identical call -> should return nil, nil due to HasMatchingRoute
+	routes2, err := HTTP(ctx, client, HTTPOptions{
+		Mount:  "app.com/api",
+		Target: "8080",
+		Yes:    true,
+	})
+	if err != nil || len(routes2) != 0 {
+		t.Errorf("expected 0 created routes for duplicate HTTP serve request, got err=%v routes=%v", err, routes2)
+	}
+
+	allRoutes, _ := client.ListRoutes(ctx)
+	if len(allRoutes) != 1 {
+		t.Errorf("expected total routes count to remain 1, got %d", len(allRoutes))
+	}
+}
+
+func TestServeHTTPSNoRedirect(t *testing.T) {
+	server, client := setupServeMockServer(t)
+	defer server.Close()
+	ctx := context.Background()
+
+	routes, err := HTTPS(ctx, client, HTTPSOptions{
+		Mount:      "secure.com/api",
+		Target:     "8080",
+		NoRedirect: true,
+		Yes:        true,
+	})
+	if err != nil || len(routes) != 1 {
+		t.Fatalf("HTTPS with NoRedirect failed: err=%v routes=%v", err, routes)
+	}
+
+	allRoutes, _ := client.ListRoutes(ctx)
+	if len(allRoutes) != 1 {
+		t.Errorf("expected only 1 HTTPS route without redirect, got %d", len(allRoutes))
+	}
+	if strings.HasPrefix(allRoutes[0].Name, "serve-redirect-") {
+		t.Errorf("unexpected redirect route created when NoRedirect=true")
+	}
+}
+
+func TestServeTCPAndUDP(t *testing.T) {
+	server, client := setupServeMockServer(t)
+	defer server.Close()
+	ctx := context.Background()
+
+	tcpRoutes, err := TCP(ctx, client, TCPOptions{
+		ListenPort: "9000",
+		Target:     "127.0.0.1:9001",
+		Yes:        true,
+	})
+	if err != nil || len(tcpRoutes) != 1 {
+		t.Fatalf("TCP serve failed: err=%v routes=%v", err, tcpRoutes)
+	}
+
+	udpRoutes, err := UDP(ctx, client, UDPOptions{
+		ListenPort: "9000",
+		Target:     "127.0.0.1:9002",
+		Yes:        true,
+	})
+	if err != nil || len(udpRoutes) != 1 {
+		t.Fatalf("UDP serve failed: err=%v routes=%v", err, udpRoutes)
+	}
+
+	listeners, _ := client.ListListeners(ctx)
+	if len(listeners) != 2 {
+		t.Fatalf("expected 2 listeners (TCP and UDP on :9000), got %d", len(listeners))
+	}
+
+	hasTCP := false
+	hasUDP := false
+	for _, l := range listeners {
+		if l.Name == "serve-tcp-9000" && l.Protocol == "tcp" {
+			hasTCP = true
+		}
+		if l.Name == "serve-udp-9000" && l.Protocol == "udp" {
+			hasUDP = true
+		}
+	}
+	if !hasTCP || !hasUDP {
+		t.Errorf("missing expected TCP/UDP listeners: hasTCP=%v hasUDP=%v listeners=%+v", hasTCP, hasUDP, listeners)
+	}
+}
+
+func TestCleanupUnusedListenersSelective(t *testing.T) {
+	server, client := setupServeMockServer(t)
+	defer server.Close()
+	ctx := context.Background()
+
+	_, _ = EnsureListener(ctx, client, "serve-http-80", ":80", "tcp", nil)
+	_, _ = EnsureListener(ctx, client, "serve-tcp-3333", ":3333", "tcp", nil)
+
+	_ = client.CreateRoute(ctx, api.RouteSpec{
+		Name:     "serve-http-route-1",
+		Protocol: "http",
+		Listener: "serve-http-80",
+	})
+
+	CleanupUnusedListeners(ctx, client)
+
+	listeners, _ := client.ListListeners(ctx)
+	if len(listeners) != 1 || listeners[0].Name != "serve-http-80" {
+		t.Errorf("expected only serve-http-80 to remain, got %+v", listeners)
+	}
+}
+

@@ -369,7 +369,7 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode b
 	fs := flag.NewFlagSet("serve https", flag.ExitOnError)
 	ttlStr := fs.String("ttl", "", "Time to live duration")
 	listenAddr := fs.String("listen", ":443", "Listen address")
-	acme := fs.Bool("acme", false, "Enable automatic Let's Encrypt TLS cert")
+	acme := fs.Bool("acme", true, "Enable automatic Let's Encrypt / ACME TLS cert")
 	noRedirect := fs.Bool("no-redirect", false, "Do not automatically create HTTP to HTTPS redirect route on port 80")
 	_ = fs.Bool("bg", false, "Run in background mode")
 	_ = fs.Bool("d", false, "Run in background mode")

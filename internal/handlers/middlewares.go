@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -367,3 +369,29 @@ func (h *TCPIPAccess) ServeTCP(conn net.Conn, metadata gateway.TCPMetadata) {
 		h.Next.ServeTCP(conn, metadata)
 	}
 }
+
+// HTTPStaticServer serves static files from a directory with optional SPA fallback.
+type HTTPStaticServer struct {
+	Dir   string
+	IsSPA bool
+}
+
+func NewHTTPStaticServer(dir string, isSPA bool) *HTTPStaticServer {
+	return &HTTPStaticServer{Dir: dir, IsSPA: isSPA}
+}
+
+func (s *HTTPStaticServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fs := http.FileServer(http.Dir(s.Dir))
+	if s.IsSPA {
+		filePath := filepath.Join(s.Dir, filepath.Clean(r.URL.Path))
+		if info, err := os.Stat(filePath); os.IsNotExist(err) || info.IsDir() {
+			indexPath := filepath.Join(s.Dir, "index.html")
+			if _, err := os.Stat(indexPath); err == nil {
+				http.ServeFile(w, r, indexPath)
+				return
+			}
+		}
+	}
+	fs.ServeHTTP(w, r)
+}
+

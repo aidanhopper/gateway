@@ -41,6 +41,33 @@ func TestACMEManagerInitWithEnvVar(t *testing.T) {
 	}
 }
 
+func TestACMEManagerWithCloudflareTokenAndStagingDirectory(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "acme-cf-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	mgr, err := NewManager(Config{
+		Email:           "admin@test-domain.org",
+		Domains:         []string{"test-domain.org"},
+		CacheDir:        filepath.Join(tmpDir, "certs"),
+		Directory:       lego.LEDirectoryStaging,
+		CloudflareToken: "test_cf_api_token_12345",
+	})
+	if err != nil {
+		t.Fatalf("NewManager with CF token failed: %v", err)
+	}
+
+	if mgr == nil {
+		t.Fatal("expected non-nil ACME Manager")
+	}
+
+	if !mgr.HasDNSProvider() {
+		t.Errorf("expected HasDNSProvider() to be true when CloudflareToken is provided")
+	}
+}
+
 
 
 func TestGenerateSelfSignedCert(t *testing.T) {

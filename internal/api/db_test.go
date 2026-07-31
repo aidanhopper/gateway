@@ -73,3 +73,33 @@ func TestTokenManagement(t *testing.T) {
 		t.Errorf("expected error revoking non-existent token")
 	}
 }
+
+func TestListenerDBUpsert(t *testing.T) {
+	db, err := OpenDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenDB failed: %v", err)
+	}
+	defer db.Close()
+
+	// Insert listener first time
+	_, err = db.Exec("INSERT INTO listeners (name, spec) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET spec = excluded.spec", "serve-https-443", `{"name":"serve-https-443","address":":443","protocol":"tcp"}`)
+	if err != nil {
+		t.Fatalf("Initial listener insert failed: %v", err)
+	}
+
+	// Insert duplicate listener name (UPSERT) should succeed without UNIQUE constraint error
+	_, err = db.Exec("INSERT INTO listeners (name, spec) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET spec = excluded.spec", "serve-https-443", `{"name":"serve-https-443","address":":443","protocol":"tcp","tls":{"auto":true,"domains":["dev.ahop.dev"]}}`)
+	if err != nil {
+		t.Fatalf("Listener UPSERT failed: %v", err)
+	}
+
+	var specStr string
+	err = db.QueryRow("SELECT spec FROM listeners WHERE name = ?", "serve-https-443").Scan(&specStr)
+	if err != nil {
+		t.Fatalf("QueryRow failed: %v", err)
+	}
+
+	if specStr == `{"name":"serve-https-443","address":":443","protocol":"tcp"}` {
+		t.Errorf("expected spec to be updated with new domains, got old spec: %s", specStr)
+	}
+}

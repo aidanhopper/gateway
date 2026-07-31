@@ -8,11 +8,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -118,9 +120,14 @@ func NewManager(cfg Config) (*Manager, error) {
 		return nil, fmt.Errorf("failed to create ACME cert cache directory: %w", err)
 	}
 
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	accountKeyPath := filepath.Join(cacheDir, "user_account.key")
+	privateKey, err := loadPrivateKey(accountKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate private key: %w", err)
+		privateKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate private key: %w", err)
+		}
+		_ = savePrivateKey(accountKeyPath, privateKey)
 	}
 
 	user := &User{
@@ -163,13 +170,40 @@ func NewManager(cfg Config) (*Manager, error) {
 		hasDNS = true
 	}
 
-	return &Manager{
+	mgr := &Manager{
 		user:     user,
 		cacheDir: cacheDir,
 		client:   client,
 		hasDNS:   hasDNS,
 		certs:    make(map[string]*tls.Certificate),
-	}, nil
+	}
+	mgr.loadCachedCertificates()
+	return mgr, nil
+}
+
+func (m *Manager) loadCachedCertificates() {
+	files, err := os.ReadDir(m.cacheDir)
+	if err != nil {
+		return
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".crt") {
+			domain := strings.TrimSuffix(f.Name(), ".crt")
+			crtPath := filepath.Join(m.cacheDir, f.Name())
+			keyPath := filepath.Join(m.cacheDir, domain+".key")
+			certBytes, err1 := os.ReadFile(crtPath)
+			keyBytes, err2 := os.ReadFile(keyPath)
+			if err1 == nil && err2 == nil {
+				tlsCert, err := tls.X509KeyPair(certBytes, keyBytes)
+				if err == nil {
+					m.mu.Lock()
+					m.certs["*."+domain] = &tlsCert
+					m.certs[domain] = &tlsCert
+					m.mu.Unlock()
+				}
+			}
+		}
+	}
 }
 
 func matchWildcardDomain(pattern, host string) bool {
@@ -215,7 +249,14 @@ func (m *Manager) ensureRegistered() error {
 		return nil
 	}
 
-	reg, err := m.client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+	reg, err := m.client.Registration.ResolveAccountByKey()
+	if err == nil && reg != nil {
+		m.user.Registration = reg
+		m.registered = true
+		return nil
+	}
+
+	reg, err = m.client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
 	if err != nil {
 		return fmt.Errorf("failed to register ACME account: %w", err)
 	}
@@ -223,6 +264,27 @@ func (m *Manager) ensureRegistered() error {
 	m.user.Registration = reg
 	m.registered = true
 	return nil
+}
+
+func savePrivateKey(path string, key *ecdsa.PrivateKey) error {
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return err
+	}
+	block := &pem.Block{Type: "EC PRIVATE KEY", Bytes: der}
+	return os.WriteFile(path, pem.EncodeToMemory(block), 0600)
+}
+
+func loadPrivateKey(path string) (*ecdsa.PrivateKey, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return nil, errors.New("failed to decode PEM block")
+	}
+	return x509.ParseECPrivateKey(block.Bytes)
 }
 
 // ObtainWildcardCertificate requests a wildcard SAN certificate (*.domain and domain) via Lego DNS-01.
@@ -248,6 +310,11 @@ func (m *Manager) ObtainWildcardCertificate(domain string) (*tls.Certificate, er
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse obtained wildcard cert pair: %w", err)
 	}
+
+	crtPath := filepath.Join(m.cacheDir, rootDomain+".crt")
+	keyPath := filepath.Join(m.cacheDir, rootDomain+".key")
+	_ = os.WriteFile(crtPath, certificates.Certificate, 0600)
+	_ = os.WriteFile(keyPath, certificates.PrivateKey, 0600)
 
 	m.mu.Lock()
 	m.certs[wildcardDomain] = &tlsCert

@@ -30,7 +30,7 @@ func HTTP(ctx context.Context, client GatewayClient, opts HTTPOptions) ([]string
 		return nil, fmt.Errorf("failed to create listener: %w", err)
 	}
 
-	routeName := fmt.Sprintf("serve-http-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-http-%d", time.Now().UnixNano())
 
 	handlerSpec := api.HandlerSpec{
 		Type:   "http_lb",
@@ -149,7 +149,7 @@ func HTTPS(ctx context.Context, client GatewayClient, opts HTTPSOptions) ([]stri
 		return nil, fmt.Errorf("failed to create HTTPS listener: %w", err)
 	}
 
-	routeName := fmt.Sprintf("serve-https-route-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-https-route-%d", time.Now().UnixNano())
 
 	var rules []api.RuleSpec
 	rules = append(rules, api.RuleSpec{Type: "secure"})
@@ -284,7 +284,7 @@ func TCP(ctx context.Context, client GatewayClient, opts TCPOptions) ([]string, 
 		return nil, fmt.Errorf("failed to create listener: %w", err)
 	}
 
-	routeName := fmt.Sprintf("serve-tcp-route-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-tcp-route-%d", time.Now().UnixNano())
 	routeSpec := api.RouteSpec{
 		Name:     routeName,
 		Protocol: "tcp",
@@ -337,7 +337,7 @@ func UDP(ctx context.Context, client GatewayClient, opts UDPOptions) ([]string, 
 		return nil, fmt.Errorf("failed to create UDP listener: %w", err)
 	}
 
-	routeName := fmt.Sprintf("serve-udp-route-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-udp-route-%d", time.Now().UnixNano())
 	routeSpec := api.RouteSpec{
 		Name:     routeName,
 		Protocol: "udp",
@@ -424,7 +424,7 @@ func Minecraft(ctx context.Context, client GatewayClient, opts MinecraftOptions)
 		ruleSpec = api.RuleSpec{Type: "and", Rules: rules}
 	}
 
-	routeName := fmt.Sprintf("serve-mc-route-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-mc-route-%d", time.Now().UnixNano())
 	routeSpec := api.RouteSpec{
 		Name:     routeName,
 		Protocol: "tcp",
@@ -498,7 +498,7 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 		if HasMatchingRoute(ctx, client, httpsListener, domain, path, targetURL) {
 			fmt.Printf("[INFO] Redirecting HTTPS https://%s -> %s (Code: %d, already active)\n", displaySource, targetURL, status)
 		} else {
-			httpsRouteName := fmt.Sprintf("serve-redirect-https-%d", time.Now().UnixNano()%10000)
+			httpsRouteName := fmt.Sprintf("serve-redirect-https-%d", time.Now().UnixNano())
 			var rules []api.RuleSpec
 			rules = append(rules, api.RuleSpec{Type: "secure"})
 			if domain != "" {
@@ -542,7 +542,7 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 		if HasMatchingRoute(ctx, client, httpListener, domain, path, targetURL) {
 			fmt.Printf("[INFO] Redirecting HTTP  http://%s -> %s (Code: %d, already active)\n", displaySource, targetURL, status)
 		} else {
-			httpRouteName := fmt.Sprintf("serve-redirect-http-%d", time.Now().UnixNano()%10000)
+			httpRouteName := fmt.Sprintf("serve-redirect-http-%d", time.Now().UnixNano())
 			var rules []api.RuleSpec
 			rules = append(rules, api.RuleSpec{Type: "not", Rule: &api.RuleSpec{Type: "secure"}})
 			if domain != "" {

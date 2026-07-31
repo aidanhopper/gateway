@@ -295,6 +295,7 @@ func TestAPITTLLeases(t *testing.T) {
 }
 
 func TestACMEAutoCertEmailRequired(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	os.Unsetenv("GATEWAY_ACME_EMAIL")
 
 	api, _, token := setupTestAPI(t)

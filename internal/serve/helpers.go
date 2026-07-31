@@ -222,7 +222,7 @@ func EnsureListener(ctx context.Context, client GatewayClient, name, addr, proto
 	listeners, err := client.ListListeners(ctx)
 	if err == nil {
 		for _, l := range listeners {
-			if l.Name == name || l.Address == addr {
+			if l.Name == name || (l.Address == addr && l.Protocol == proto) {
 				if tls != nil {
 					needUpdate := false
 					var newDomains []string
@@ -247,6 +247,7 @@ func EnsureListener(ctx context.Context, client GatewayClient, name, addr, proto
 						}
 						spec := l
 						spec.TLS = &updatedTLS
+						_ = client.DeleteListener(ctx, l.Name)
 						_ = client.CreateListener(ctx, spec)
 					}
 				}

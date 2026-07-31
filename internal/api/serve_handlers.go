@@ -172,7 +172,7 @@ func (a *API) handleServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routeName := fmt.Sprintf("serve-http-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-http-%d", time.Now().UnixNano())
 
 	handlerSpec := HandlerSpec{
 		Type:   "http_lb",
@@ -245,8 +245,9 @@ func (a *API) handleServeHTTPS(w http.ResponseWriter, r *http.Request) {
 	lName := fmt.Sprintf("serve-https-%s", strings.TrimPrefix(lAddr, ":"))
 
 	var tlsSpec *TLSConfigSpec
-	if req.ACME || domainVal != "" {
-		tlsSpec = &TLSConfigSpec{Auto: req.ACME}
+	useACME := req.ACME || domainVal != ""
+	if useACME {
+		tlsSpec = &TLSConfigSpec{Auto: true}
 		if domainVal != "" {
 			tlsSpec.Domains = []string{domainVal}
 		}
@@ -264,7 +265,7 @@ func (a *API) handleServeHTTPS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routeName := fmt.Sprintf("serve-https-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-https-%d", time.Now().UnixNano())
 	var rules []RuleSpec
 	rules = append(rules, RuleSpec{Type: "secure"})
 	if domainVal != "" {
@@ -408,7 +409,7 @@ func (a *API) handleServeStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routeName := fmt.Sprintf("serve-dir-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-dir-%d", time.Now().UnixNano())
 	var rules []RuleSpec
 	if req.IsHTTP {
 		rules = append(rules, RuleSpec{Type: "not", Rule: &RuleSpec{Type: "secure"}})
@@ -476,7 +477,7 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 	_ = a.ensureListenerInternal(ListenerSpec{Name: "serve-https-443", Address: ":443", Protocol: "tcp", TLS: &TLSConfigSpec{Auto: true, Domains: []string{domain}}})
 	_ = a.ensureListenerInternal(ListenerSpec{Name: "serve-http-80", Address: ":80", Protocol: "tcp"})
 
-	httpsRouteName := fmt.Sprintf("serve-redirect-https-%d", time.Now().UnixNano()%10000)
+	httpsRouteName := fmt.Sprintf("serve-redirect-https-%d", time.Now().UnixNano())
 	var rules []RuleSpec
 	rules = append(rules, RuleSpec{Type: "secure"})
 	if domain != "" {
@@ -504,7 +505,7 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = a.AddRoute(httpsRoute)
 
-	httpRouteName := fmt.Sprintf("serve-redirect-http-%d", time.Now().UnixNano()%10000)
+	httpRouteName := fmt.Sprintf("serve-redirect-http-%d", time.Now().UnixNano())
 	var rRules []RuleSpec
 	rRules = append(rRules, RuleSpec{Type: "not", Rule: &RuleSpec{Type: "secure"}})
 	if domain != "" {
@@ -567,7 +568,7 @@ func (a *API) handleServeTCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routeName := fmt.Sprintf("serve-tcp-route-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-tcp-route-%d", time.Now().UnixNano())
 	routeSpec := RouteSpec{
 		Name:     routeName,
 		Protocol: "tcp",
@@ -616,7 +617,7 @@ func (a *API) handleServeUDP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routeName := fmt.Sprintf("serve-udp-route-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-udp-route-%d", time.Now().UnixNano())
 	routeSpec := RouteSpec{
 		Name:     routeName,
 		Protocol: "udp",
@@ -693,7 +694,7 @@ func (a *API) handleServeMinecraft(w http.ResponseWriter, r *http.Request) {
 		ruleSpec = RuleSpec{Type: "and", Rules: rules}
 	}
 
-	routeName := fmt.Sprintf("serve-mc-route-%d", time.Now().UnixNano()%10000)
+	routeName := fmt.Sprintf("serve-mc-route-%d", time.Now().UnixNano())
 	routeSpec := RouteSpec{
 		Name:     routeName,
 		Protocol: "tcp",
@@ -799,7 +800,7 @@ func parseMountArg(arg string) (domain string, path string) {
 func (a *API) ensureListenerInternal(spec ListenerSpec) error {
 	a.mu.RLock()
 	for _, l := range a.listeners {
-		if l.Name == spec.Name || l.Address == spec.Address {
+		if l.Name == spec.Name || (l.Address == spec.Address && l.Protocol == spec.Protocol) {
 			a.mu.RUnlock()
 			return nil
 		}

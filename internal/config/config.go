@@ -87,6 +87,11 @@ func parseServerConfigData(data []byte) (*ServerConfig, error) {
 	if cfg.DB == "" && cfg.Database != "" {
 		cfg.DB = cfg.Database
 	}
+	if strings.HasPrefix(cfg.DB, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			cfg.DB = filepath.Join(home, cfg.DB[2:])
+		}
+	}
 	if cfg.FirewallSection.Driver != "" {
 		cfg.Firewall = cfg.FirewallSection.Driver
 	}
@@ -109,14 +114,10 @@ func parseServerConfigData(data []byte) (*ServerConfig, error) {
 // in priority order (first found wins).
 func serverConfigPaths() []string {
 	paths := []string{
+		filepath.Join(ConfigDir(), "server.yaml"),
+		filepath.Join(ConfigDir(), "server.yml"),
 		"/etc/gateway/server.yaml",
 		"/etc/gateway/server.yml",
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths,
-			filepath.Join(home, ".config", "gateway", "server.yaml"),
-			filepath.Join(home, ".config", "gateway", "server.yml"),
-		)
 	}
 	return paths
 }
@@ -170,6 +171,11 @@ func applyServerEnvOverrides(cfg *ServerConfig) {
 		cfg.Addr = v
 	}
 	if v := os.Getenv("GATEWAY_DB"); v != "" {
+		if strings.HasPrefix(v, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				v = filepath.Join(home, v[2:])
+			}
+		}
 		cfg.DB = v
 	}
 	if v := os.Getenv("GATEWAY_FIREWALL"); v != "" {

@@ -99,6 +99,7 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 		}
 		acmeMgr, err := acme.NewManager(acmeCfg)
 		if err != nil {
+			LogWarn("ACME", "failed to initialize ACME auto-cert manager: %v", err)
 			hasPublicDomain := false
 			for _, d := range spec.Domains {
 				dStr := strings.ToLower(strings.TrimSpace(d))
@@ -110,10 +111,19 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 			if hasPublicDomain {
 				return nil, fmt.Errorf("failed to initialize ACME auto-cert manager: %w", err)
 			}
-		} else if acmeMgr != nil && acmeMgr.HasDNSProvider() {
-			for _, d := range spec.Domains {
-				if d != "" && d != "localhost" && !strings.HasSuffix(d, ".localhost") && strings.Contains(d, ".") {
-					_, _ = acmeMgr.ObtainWildcardCertificate(d)
+		} else if acmeMgr != nil {
+			if !acmeMgr.HasDNSProvider() {
+				LogWarn("ACME", "no Cloudflare DNS API token provided for DNS-01 solver (set cloudflare_token in server.yml or CF_DNS_API_TOKEN)")
+			} else {
+				for _, d := range spec.Domains {
+					if d != "" && d != "localhost" && !strings.HasSuffix(d, ".localhost") && strings.Contains(d, ".") {
+						LogInfo("ACME", "obtaining wildcard cert for %s via Cloudflare DNS-01...", d)
+						if _, err := acmeMgr.ObtainWildcardCertificate(d); err != nil {
+							LogWarn("ACME", "failed to obtain wildcard cert for %s: %v", d, err)
+						} else {
+							LogInfo("ACME", "successfully obtained and cached wildcard cert for %s", d)
+						}
+					}
 				}
 			}
 			return gateway.TLSConfigHandlerFunc(func(info *gateway.TLSInfo) (*tls.Config, error) {
@@ -508,7 +518,7 @@ func (a *API) handleCreateListener(w http.ResponseWriter, r *http.Request) {
 	}
 
 	specJSON, _ := json.Marshal(spec)
-	if _, err := a.db.Exec("INSERT INTO listeners (name, spec) VALUES (?, ?)", spec.Name, string(specJSON)); err != nil {
+	if _, err := a.db.Exec("INSERT INTO listeners (name, spec) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET spec = excluded.spec", spec.Name, string(specJSON)); err != nil {
 		_ = a.fw.ClosePort(spec.Protocol, port)
 		_ = a.gw.RemoveListener(spec.Name)
 		writeError(w, http.StatusInternalServerError, "failed to persist listener to database")
@@ -856,7 +866,7 @@ func (a *API) AddListener(spec ListenerSpec) error {
 	defer a.mu.Unlock()
 
 	if _, exists := a.listeners[spec.Name]; exists {
-		return fmt.Errorf("listener %s already exists", spec.Name)
+		_ = a.gw.RemoveListener(spec.Name)
 	}
 
 	gwListener := gateway.Listener{
@@ -876,7 +886,7 @@ func (a *API) AddListener(spec ListenerSpec) error {
 	}
 
 	specJSON, _ := json.Marshal(spec)
-	if _, err := a.db.Exec("INSERT INTO listeners (name, spec) VALUES (?, ?)", spec.Name, string(specJSON)); err != nil {
+	if _, err := a.db.Exec("INSERT INTO listeners (name, spec) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET spec = excluded.spec", spec.Name, string(specJSON)); err != nil {
 		_ = a.fw.ClosePort(spec.Protocol, port)
 		_ = a.gw.RemoveListener(spec.Name)
 		return fmt.Errorf("failed to persist listener to database: %w", err)
