@@ -159,6 +159,7 @@ func NewManager(cfg Config) (*Manager, error) {
 
 	hasDNS := false
 	if cfToken != "" {
+		_ = os.Setenv("CLOUDFLARE_DNS_API_TOKEN", cfToken)
 		cfConfig := cloudflare.NewDefaultConfig()
 		cfConfig.AuthToken = cfToken
 		if dnsProvider, err := cloudflare.NewDNSProviderConfig(cfConfig); err == nil {

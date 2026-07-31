@@ -66,6 +66,7 @@ type ServerConfig struct {
 		Email           string `yaml:"email"`
 		Directory       string `yaml:"directory"`
 		CloudflareToken string `yaml:"cloudflare_token"`
+		Token           string `yaml:"token"`
 	} `yaml:"acme"`
 
 	// Resolved flat values used by daemon
@@ -106,6 +107,8 @@ func parseServerConfigData(data []byte) (*ServerConfig, error) {
 	}
 	if cfg.ACMESection.CloudflareToken != "" {
 		cfg.ACMECloudflareToken = cfg.ACMESection.CloudflareToken
+	} else if cfg.ACMESection.Token != "" {
+		cfg.ACMECloudflareToken = cfg.ACMESection.Token
 	}
 	return cfg, nil
 }

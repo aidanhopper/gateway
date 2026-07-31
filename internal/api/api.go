@@ -127,14 +127,30 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 				}
 			}
 			return gateway.TLSConfigHandlerFunc(func(info *gateway.TLSInfo) (*tls.Config, error) {
-				cert, err := acmeMgr.GetCertificate(&tls.ClientHelloInfo{ServerName: info.SNI})
-				if err == nil && cert != nil {
-					return &tls.Config{Certificates: []tls.Certificate{*cert}}, nil
+				getCertFunc := func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					sni := info.SNI
+					if hello != nil && hello.ServerName != "" {
+						sni = hello.ServerName
+					}
+					cert, err := acmeMgr.GetCertificate(&tls.ClientHelloInfo{ServerName: sni})
+					if err == nil && cert != nil {
+						return cert, nil
+					}
+					if devCert != nil {
+						return devCert, nil
+					}
+					return nil, err
 				}
-				if devCert != nil {
-					return &tls.Config{Certificates: []tls.Certificate{*devCert}}, nil
+
+				cert, _ := getCertFunc(&tls.ClientHelloInfo{ServerName: info.SNI})
+				var certs []tls.Certificate
+				if cert != nil {
+					certs = []tls.Certificate{*cert}
 				}
-				return nil, err
+				return &tls.Config{
+					Certificates:   certs,
+					GetCertificate: getCertFunc,
+				}, nil
 			}), nil
 		}
 	}
