@@ -147,3 +147,15 @@ func TestDBPathUserVsEnvOverride(t *testing.T) {
 		}
 	}
 }
+
+func TestACMECacheDirResolution(t *testing.T) {
+	tempXDG := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tempXDG)
+
+	expectedUserCache := filepath.Join(tempXDG, "gateway", "acme_certs")
+	if os.Getuid() != 0 {
+		if cache := ACMECacheDir(); cache != expectedUserCache {
+			t.Errorf("expected ACMECacheDir %s in user mode, got %s", expectedUserCache, cache)
+		}
+	}
+}

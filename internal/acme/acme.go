@@ -8,9 +8,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"net"
 	"os"
@@ -88,13 +90,15 @@ type Config struct {
 
 // Manager manages ACME wildcard certificate issuance and caching via Lego DNS-01.
 type Manager struct {
-	user       *User
-	client     *lego.Client
-	cacheDir   string
-	hasDNS     bool
-	mu         sync.RWMutex
-	certs      map[string]*tls.Certificate
-	registered bool
+	user         *User
+	client       *lego.Client
+	cacheDir     string
+	hasDNS       bool
+	isProduction bool
+	mu           sync.RWMutex
+	certs        map[string]*tls.Certificate
+	rateLimits   map[string]time.Time
+	registered   bool
 }
 
 func (m *Manager) HasDNSProvider() bool {
@@ -143,6 +147,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	if dirURL != "" {
 		legoCfg.CADirURL = dirURL
 	}
+	isProduction := dirURL == "" || dirURL == lego.LEDirectoryProduction
 
 	client, err := lego.NewClient(legoCfg)
 	if err != nil {
@@ -172,35 +177,48 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 
 	mgr := &Manager{
-		user:     user,
-		cacheDir: cacheDir,
-		client:   client,
-		hasDNS:   hasDNS,
-		certs:    make(map[string]*tls.Certificate),
+		user:         user,
+		cacheDir:     cacheDir,
+		client:       client,
+		hasDNS:       hasDNS,
+		isProduction: isProduction,
+		certs:        make(map[string]*tls.Certificate),
+		rateLimits:   make(map[string]time.Time),
 	}
+	mgr.loadRateLimits()
 	mgr.loadCachedCertificates()
 	return mgr, nil
 }
 
 func (m *Manager) loadCachedCertificates() {
-	files, err := os.ReadDir(m.cacheDir)
-	if err != nil {
-		return
+	candidateDirs := []string{m.cacheDir}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidateDirs = append(candidateDirs, filepath.Join(home, ".local", "share", "gateway", "acme_certs"))
 	}
-	for _, f := range files {
-		if strings.HasSuffix(f.Name(), ".crt") {
-			domain := strings.TrimSuffix(f.Name(), ".crt")
-			crtPath := filepath.Join(m.cacheDir, f.Name())
-			keyPath := filepath.Join(m.cacheDir, domain+".key")
-			certBytes, err1 := os.ReadFile(crtPath)
-			keyBytes, err2 := os.ReadFile(keyPath)
-			if err1 == nil && err2 == nil {
-				tlsCert, err := tls.X509KeyPair(certBytes, keyBytes)
-				if err == nil {
-					m.mu.Lock()
-					m.certs["*."+domain] = &tlsCert
-					m.certs[domain] = &tlsCert
-					m.mu.Unlock()
+	if rootHome := "/root/.local/share/gateway/acme_certs"; rootHome != m.cacheDir {
+		candidateDirs = append(candidateDirs, rootHome)
+	}
+
+	for _, dir := range candidateDirs {
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if strings.HasSuffix(f.Name(), ".crt") {
+				domain := strings.TrimSuffix(f.Name(), ".crt")
+				crtPath := filepath.Join(dir, f.Name())
+				keyPath := filepath.Join(dir, domain+".key")
+				certBytes, err1 := os.ReadFile(crtPath)
+				keyBytes, err2 := os.ReadFile(keyPath)
+				if err1 == nil && err2 == nil {
+					tlsCert, err := tls.X509KeyPair(certBytes, keyBytes)
+					if err == nil {
+						m.mu.Lock()
+						m.certs["*."+domain] = &tlsCert
+						m.certs[domain] = &tlsCert
+						m.mu.Unlock()
+					}
 				}
 			}
 		}
@@ -288,6 +306,31 @@ func loadPrivateKey(path string) (*ecdsa.PrivateKey, error) {
 	return x509.ParseECPrivateKey(block.Bytes)
 }
 
+func isProductionCert(cert *tls.Certificate) bool {
+	if cert == nil || len(cert.Certificate) == 0 {
+		return false
+	}
+	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return false
+	}
+	issuer := strings.ToUpper(x509Cert.Issuer.CommonName + " " + strings.Join(x509Cert.Issuer.Organization, " "))
+	if strings.Contains(issuer, "STAGING") || strings.Contains(issuer, "FAKE LE") || strings.Contains(issuer, "GATEWAY DEVELOPMENT") {
+		return false
+	}
+	return true
+}
+
+func (m *Manager) isCertValidAndUsable(cert *tls.Certificate) bool {
+	if !isCertValid(cert) {
+		return false
+	}
+	if m.isProduction && !isProductionCert(cert) {
+		return false
+	}
+	return true
+}
+
 func isCertValid(cert *tls.Certificate) bool {
 	if cert == nil || len(cert.Certificate) == 0 {
 		return false
@@ -296,7 +339,126 @@ func isCertValid(cert *tls.Certificate) bool {
 	if err != nil {
 		return false
 	}
-	return time.Now().Add(30 * 24 * time.Hour).Before(x509Cert.NotAfter)
+	return time.Now().Add(7 * 24 * time.Hour).Before(x509Cert.NotAfter)
+}
+
+func parseRetryAfter(errStr string) time.Time {
+	idx := strings.Index(errStr, "retry after ")
+	if idx != -1 {
+		rest := errStr[idx+len("retry after "):]
+		if end := strings.IndexAny(rest, ":\n,"); end != -1 {
+			candidate := strings.TrimSpace(rest[:end])
+			if t, err := time.Parse("2006-01-02 15:04:05 MST", candidate); err == nil {
+				return t
+			}
+		}
+		if len(rest) >= 23 {
+			candidate := strings.TrimSpace(rest[:23])
+			if t, err := time.Parse("2006-01-02 15:04:05 MST", candidate); err == nil {
+				return t
+			}
+		}
+	}
+	return time.Now().Add(24 * time.Hour)
+}
+
+func (m *Manager) rateLimitsPath() string {
+	return filepath.Join(m.cacheDir, "rate_limits.json")
+}
+
+func (m *Manager) loadRateLimits() {
+	data, err := os.ReadFile(m.rateLimitsPath())
+	if err != nil {
+		return
+	}
+	var raw map[string]time.Time
+	if err := json.Unmarshal(data, &raw); err == nil {
+		m.mu.Lock()
+		for k, v := range raw {
+			m.rateLimits[k] = v
+		}
+		m.mu.Unlock()
+	}
+}
+
+func (m *Manager) saveRateLimits() {
+	m.mu.RLock()
+	data, err := json.MarshalIndent(m.rateLimits, "", "  ")
+	m.mu.RUnlock()
+	if err == nil {
+		_ = os.WriteFile(m.rateLimitsPath(), data, 0600)
+	}
+}
+
+func (m *Manager) isRateLimited(domain string) (time.Time, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	t, ok := m.rateLimits[domain]
+	if !ok {
+		return time.Time{}, false
+	}
+	if time.Now().After(t) {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+func (m *Manager) recordRateLimit(domain string, retryAfter time.Time) {
+	m.mu.Lock()
+	m.rateLimits[domain] = retryAfter
+	m.mu.Unlock()
+	m.saveRateLimits()
+}
+
+func (m *Manager) obtainStagingCertificate(request certificate.ObtainRequest, rootDomain, domain string) (*tls.Certificate, error) {
+	stagingCfg := lego.NewConfig(m.user)
+	stagingCfg.CADirURL = lego.LEDirectoryStaging
+	stagingClient, err := lego.NewClient(stagingCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create ACME staging client: %w", err)
+	}
+
+	cfToken := os.Getenv("CLOUDFLARE_DNS_API_TOKEN")
+	if cfToken != "" {
+		cfConfig := cloudflare.NewDefaultConfig()
+		cfConfig.AuthToken = cfToken
+		if dnsProvider, pErr := cloudflare.NewDNSProviderConfig(cfConfig); pErr == nil {
+			_ = stagingClient.Challenge.SetDNS01Provider(dnsProvider)
+		}
+	}
+
+	certificates, err := stagingClient.Certificate.Obtain(request)
+	if err != nil {
+		m.mu.RLock()
+		if existingCert, ok := m.certs[rootDomain]; ok && isCertValid(existingCert) {
+			m.mu.RUnlock()
+			return existingCert, nil
+		}
+		if existingCert, ok := m.certs[domain]; ok && isCertValid(existingCert) {
+			m.mu.RUnlock()
+			return existingCert, nil
+		}
+		m.mu.RUnlock()
+		return nil, fmt.Errorf("acme obtain staging cert failed for %s: %w", rootDomain, err)
+	}
+
+	tlsCert, err := tls.X509KeyPair(certificates.Certificate, certificates.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse staging cert pair: %w", err)
+	}
+
+	crtPath := filepath.Join(m.cacheDir, rootDomain+".crt")
+	keyPath := filepath.Join(m.cacheDir, rootDomain+".key")
+	_ = os.WriteFile(crtPath, certificates.Certificate, 0600)
+	_ = os.WriteFile(keyPath, certificates.PrivateKey, 0600)
+
+	wildcardDomain := "*." + rootDomain
+	m.mu.Lock()
+	m.certs[wildcardDomain] = &tlsCert
+	m.certs[rootDomain] = &tlsCert
+	m.mu.Unlock()
+
+	return &tlsCert, nil
 }
 
 // ObtainWildcardCertificate requests a wildcard SAN certificate (*.domain and domain) via Lego DNS-01.
@@ -305,28 +467,55 @@ func (m *Manager) ObtainWildcardCertificate(domain string) (*tls.Certificate, er
 	wildcardDomain := "*." + rootDomain
 
 	m.mu.RLock()
-	if existingCert, ok := m.certs[rootDomain]; ok && isCertValid(existingCert) {
+	if existingCert, ok := m.certs[rootDomain]; ok && m.isCertValidAndUsable(existingCert) {
 		m.mu.RUnlock()
 		return existingCert, nil
 	}
-	if existingCert, ok := m.certs[wildcardDomain]; ok && isCertValid(existingCert) {
+	if existingCert, ok := m.certs[wildcardDomain]; ok && m.isCertValidAndUsable(existingCert) {
+		m.mu.RUnlock()
+		return existingCert, nil
+	}
+	if existingCert, ok := m.certs[domain]; ok && m.isCertValidAndUsable(existingCert) {
 		m.mu.RUnlock()
 		return existingCert, nil
 	}
 	m.mu.RUnlock()
-
-	if err := m.ensureRegistered(); err != nil {
-		return nil, err
-	}
 
 	request := certificate.ObtainRequest{
 		Domains: []string{wildcardDomain, rootDomain},
 		Bundle:  true,
 	}
 
+	if retryAfter, limited := m.isRateLimited(rootDomain); limited {
+		log.Printf("[INFO ] [ACME    ] domain %s is rate-limited by Let's Encrypt until %v, using staging...", rootDomain, retryAfter.Format("2006-01-02 15:04:05 MST"))
+		return m.obtainStagingCertificate(request, rootDomain, domain)
+	}
+
+	if err := m.ensureRegistered(); err != nil {
+		return nil, err
+	}
+
 	certificates, err := m.client.Certificate.Obtain(request)
 	if err != nil {
-		return nil, fmt.Errorf("acme obtain wildcard cert failed for %s: %w", rootDomain, err)
+		if strings.Contains(err.Error(), "rateLimited") || strings.Contains(err.Error(), "too many certificates") {
+			retryAfter := parseRetryAfter(err.Error())
+			m.recordRateLimit(rootDomain, retryAfter)
+			log.Printf("[WARN ] [ACME    ] production rate limit hit for %s (retry after %v), falling back to Let's Encrypt staging...", rootDomain, retryAfter.Format("2006-01-02 15:04:05 MST"))
+			return m.obtainStagingCertificate(request, rootDomain, domain)
+		}
+		if err != nil {
+			m.mu.RLock()
+			if existingCert, ok := m.certs[rootDomain]; ok && isCertValid(existingCert) {
+				m.mu.RUnlock()
+				return existingCert, nil
+			}
+			if existingCert, ok := m.certs[domain]; ok && isCertValid(existingCert) {
+				m.mu.RUnlock()
+				return existingCert, nil
+			}
+			m.mu.RUnlock()
+			return nil, fmt.Errorf("acme obtain wildcard cert failed for %s: %w", rootDomain, err)
+		}
 	}
 
 	tlsCert, err := tls.X509KeyPair(certificates.Certificate, certificates.PrivateKey)

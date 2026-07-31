@@ -226,10 +226,16 @@ func ConfigDir() string {
 	return filepath.Join(".", ".config", "gateway")
 }
 
-// DataDir returns $XDG_DATA_HOME/gateway or ~/.local/share/gateway.
+// DataDir returns /var/lib/gateway (if root or /var/lib/gateway exists), $XDG_DATA_HOME/gateway, or ~/.local/share/gateway.
 func DataDir() string {
 	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
 		return filepath.Join(xdg, "gateway")
+	}
+	if os.Getuid() == 0 {
+		return "/var/lib/gateway"
+	}
+	if fi, err := os.Stat("/var/lib/gateway"); err == nil && fi.IsDir() {
+		return "/var/lib/gateway"
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		return filepath.Join(home, ".local", "share", "gateway")
