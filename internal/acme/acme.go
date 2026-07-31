@@ -411,11 +411,24 @@ func (m *Manager) recordRateLimit(domain string, retryAfter time.Time) {
 }
 
 func (m *Manager) obtainStagingCertificate(request certificate.ObtainRequest, rootDomain, domain string) (*tls.Certificate, error) {
-	stagingCfg := lego.NewConfig(m.user)
+	stagingUser := &User{
+		Email: m.user.Email,
+		key:   m.user.key,
+	}
+
+	stagingCfg := lego.NewConfig(stagingUser)
 	stagingCfg.CADirURL = lego.LEDirectoryStaging
 	stagingClient, err := lego.NewClient(stagingCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ACME staging client: %w", err)
+	}
+
+	reg, regErr := stagingClient.Registration.ResolveAccountByKey()
+	if regErr != nil || reg == nil {
+		reg, regErr = stagingClient.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+	}
+	if regErr == nil && reg != nil {
+		stagingUser.Registration = reg
 	}
 
 	cfToken := os.Getenv("CLOUDFLARE_DNS_API_TOKEN")

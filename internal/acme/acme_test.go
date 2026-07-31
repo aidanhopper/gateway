@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v4/lego"
+	"github.com/go-acme/lego/v4/registration"
 )
 
 func TestACMEEmailRequired(t *testing.T) {
@@ -310,5 +311,30 @@ func TestRateLimitExpirationClearsLimit(t *testing.T) {
 
 	if _, limited := mgr.isRateLimited("expired-domain.com"); limited {
 		t.Errorf("expected isRateLimited to return false for expired rate limit timestamp")
+	}
+}
+
+func TestStagingUserAccountIsolation(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr, err := NewManager(Config{
+		Email:    "admin@staging-test.org",
+		CacheDir: tmpDir,
+	})
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	// Manually set a mock production registration on mgr.user
+	mgr.user.Registration = &registration.Resource{
+		URI: "https://acme-v02.api.letsencrypt.org/acme/acct/123456",
+	}
+
+	stagingUser := &User{
+		Email: mgr.user.Email,
+		key:   mgr.user.key,
+	}
+
+	if stagingUser.Registration != nil {
+		t.Fatalf("expected fresh stagingUser Registration to be nil before staging registration, got %v", stagingUser.Registration)
 	}
 }
