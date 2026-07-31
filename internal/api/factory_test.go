@@ -103,7 +103,7 @@ func TestNestedHandlerComposition(t *testing.T) {
 		Next: &HandlerSpec{
 			Type: "http_redirect",
 			Config: map[string]any{
-				"status": 302,
+				"status": 301,
 				"url":    "https://example.com",
 			},
 		},

@@ -233,5 +233,60 @@ func TestHTTPMiddlewares(t *testing.T) {
 		if loc := rec.Header().Get("Location"); loc != "https://app.localhost/script.sh?foo=bar" {
 			t.Errorf("expected Location https://app.localhost/script.sh?foo=bar, got %q", loc)
 		}
+
+		// 4. ForwardPath enabled with StripPrefix
+		redirSubpath := &HTTPRedirect{
+			URL:         "https://github.com/aidanhopper",
+			ForwardPath: true,
+			StripPrefix: "/github",
+			KeepQuery:   true,
+		}
+		req = httptest.NewRequest("GET", "/github/gateway?ref=main", nil)
+		rec = httptest.NewRecorder()
+		redirSubpath.ServeHTTP(rec, req)
+		if loc := rec.Header().Get("Location"); loc != "https://github.com/aidanhopper/gateway?ref=main" {
+			t.Errorf("expected Location https://github.com/aidanhopper/gateway?ref=main, got %q", loc)
+		}
+
+		// 5. ForwardPath disabled (No forwarding subpath)
+		redirNoFwd := &HTTPRedirect{
+			URL:         "https://github.com/aidanhopper",
+			ForwardPath: false,
+			KeepQuery:   true,
+		}
+		req = httptest.NewRequest("GET", "/github/gateway?ref=main", nil)
+		rec = httptest.NewRecorder()
+		redirNoFwd.ServeHTTP(rec, req)
+		if loc := rec.Header().Get("Location"); loc != "https://github.com/aidanhopper?ref=main" {
+			t.Errorf("expected Location https://github.com/aidanhopper?ref=main, got %q", loc)
+		}
+
+		// 6. KeepQuery disabled (Strips query string)
+		redirNoQuery := &HTTPRedirect{
+			URL:         "https://github.com/aidanhopper",
+			ForwardPath: false,
+			KeepQuery:   false,
+		}
+		req = httptest.NewRequest("GET", "/github/gateway?ref=main", nil)
+		rec = httptest.NewRecorder()
+		redirNoQuery.ServeHTTP(rec, req)
+		if loc := rec.Header().Get("Location"); loc != "https://github.com/aidanhopper" {
+			t.Errorf("expected Location https://github.com/aidanhopper, got %q", loc)
+		}
+
+		// 7. Status codes 307 and 308
+		redir307 := &HTTPRedirect{URL: "https://example.com", Status: 307}
+		rec = httptest.NewRecorder()
+		redir307.ServeHTTP(rec, httptest.NewRequest("POST", "/", nil))
+		if rec.Code != http.StatusTemporaryRedirect {
+			t.Errorf("expected 307 Temporary Redirect, got %d", rec.Code)
+		}
+
+		redir308 := &HTTPRedirect{URL: "https://example.com", Status: 308}
+		rec = httptest.NewRecorder()
+		redir308.ServeHTTP(rec, httptest.NewRequest("POST", "/", nil))
+		if rec.Code != http.StatusPermanentRedirect {
+			t.Errorf("expected 308 Permanent Redirect, got %d", rec.Code)
+		}
 	})
 }

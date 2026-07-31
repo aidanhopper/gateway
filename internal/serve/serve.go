@@ -64,7 +64,7 @@ func HTTP(ctx context.Context, client GatewayClient, opts HTTPOptions) ([]string
 		Name:     routeName,
 		Protocol: "http",
 		Listener: actualListener,
-		Priority: 1,
+		Priority: CalculateAutoPriority(ruleSpec, opts.Priority),
 		TTL:      int(opts.TTL.Seconds()),
 		Rule:     ruleSpec,
 		Handler:  handlerSpec,
@@ -182,7 +182,7 @@ func HTTPS(ctx context.Context, client GatewayClient, opts HTTPSOptions) ([]stri
 		Name:     routeName,
 		Protocol: "http",
 		Listener: actualListener,
-		Priority: 1,
+		Priority: CalculateAutoPriority(ruleSpec, opts.Priority),
 		TTL:      int(opts.TTL.Seconds()),
 		Rule:     ruleSpec,
 		Handler:  handlerSpec,
@@ -242,7 +242,7 @@ func HTTPS(ctx context.Context, client GatewayClient, opts HTTPSOptions) ([]stri
 				Name:     redirectRouteName,
 				Protocol: "http",
 				Listener: httpListener,
-				Priority: 1,
+				Priority: CalculateAutoPriority(rRuleSpec, opts.Priority),
 				TTL:      int(opts.TTL.Seconds()),
 				Rule:     rRuleSpec,
 				Handler: api.HandlerSpec{
@@ -289,7 +289,7 @@ func TCP(ctx context.Context, client GatewayClient, opts TCPOptions) ([]string, 
 		Name:     routeName,
 		Protocol: "tcp",
 		Listener: actualListener,
-		Priority: 1,
+		Priority: CalculateAutoPriority(api.RuleSpec{Type: "any"}, opts.Priority),
 		TTL:      int(opts.TTL.Seconds()),
 		Rule:     api.RuleSpec{Type: "any"},
 		Handler: api.HandlerSpec{
@@ -342,7 +342,7 @@ func UDP(ctx context.Context, client GatewayClient, opts UDPOptions) ([]string, 
 		Name:     routeName,
 		Protocol: "udp",
 		Listener: actualListener,
-		Priority: 1,
+		Priority: CalculateAutoPriority(api.RuleSpec{Type: "any"}, opts.Priority),
 		TTL:      int(opts.TTL.Seconds()),
 		Rule:     api.RuleSpec{Type: "any"},
 		Handler: api.HandlerSpec{
@@ -429,7 +429,7 @@ func Minecraft(ctx context.Context, client GatewayClient, opts MinecraftOptions)
 		Name:     routeName,
 		Protocol: "tcp",
 		Listener: actualListener,
-		Priority: 1,
+		Priority: CalculateAutoPriority(ruleSpec, opts.Priority),
 		TTL:      int(opts.TTL.Seconds()),
 		Rule:     ruleSpec,
 		Handler: api.HandlerSpec{
@@ -473,7 +473,7 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 	}
 
 	status := opts.StatusCode
-	if status != 301 && status != 302 {
+	if status != 301 && status != 302 && status != 307 && status != 308 {
 		status = 301
 	}
 
@@ -491,6 +491,19 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 		tlsSpec.Domains = []string{domain}
 	}
 
+	pathRuleType := "path_prefix"
+	if opts.Exact {
+		pathRuleType = "path"
+	}
+
+	handlerConfig := map[string]any{
+		"url":          targetURL,
+		"status":       float64(status),
+		"forward_path": !opts.NoForwardPath,
+		"strip_prefix": path,
+		"keep_query":   !opts.NoQuery,
+	}
+
 	httpsListener, err := EnsureListener(ctx, client, "serve-https-443", ":443", "tcp", tlsSpec)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] Could not create HTTPS listener on :443: %v\n", err)
@@ -505,7 +518,7 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 				rules = append(rules, api.RuleSpec{Type: "host", Value: domain})
 			}
 			if path != "/" && path != "" {
-				rules = append(rules, api.RuleSpec{Type: "path_prefix", Value: path})
+				rules = append(rules, api.RuleSpec{Type: pathRuleType, Value: path})
 			}
 
 			ruleSpec := rules[0]
@@ -517,12 +530,12 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 				Name:     httpsRouteName,
 				Protocol: "http",
 				Listener: httpsListener,
-				Priority: 1,
+				Priority: CalculateAutoPriority(ruleSpec, opts.Priority),
 				TTL:      int(opts.TTL.Seconds()),
 				Rule:     ruleSpec,
 				Handler: api.HandlerSpec{
 					Type:   "http_redirect",
-					Config: map[string]any{"url": targetURL, "status": float64(status)},
+					Config: handlerConfig,
 				},
 			}
 
@@ -549,7 +562,7 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 				rules = append(rules, api.RuleSpec{Type: "host", Value: domain})
 			}
 			if path != "/" && path != "" {
-				rules = append(rules, api.RuleSpec{Type: "path_prefix", Value: path})
+				rules = append(rules, api.RuleSpec{Type: pathRuleType, Value: path})
 			}
 
 			ruleSpec := rules[0]
@@ -561,12 +574,12 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 				Name:     httpRouteName,
 				Protocol: "http",
 				Listener: httpListener,
-				Priority: 1,
+				Priority: CalculateAutoPriority(ruleSpec, opts.Priority),
 				TTL:      int(opts.TTL.Seconds()),
 				Rule:     ruleSpec,
 				Handler: api.HandlerSpec{
 					Type:   "http_redirect",
-					Config: map[string]any{"url": targetURL, "status": float64(status)},
+					Config: handlerConfig,
 				},
 			}
 

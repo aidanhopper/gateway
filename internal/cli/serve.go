@@ -324,6 +324,8 @@ func runServeHTTP(ctx context.Context, client *Client, args []string, yesMode bo
 
 	fs := flag.NewFlagSet("serve http", flag.ExitOnError)
 	ttlStr := fs.String("ttl", "", "Time to live duration")
+	priority := fs.Int("priority", 0, "Route priority (0 for auto)")
+	fs.IntVar(priority, "p", 0, "Route priority (shorthand)")
 	_ = fs.Bool("bg", false, "Run in background mode")
 	_ = fs.Bool("d", false, "Run in background mode")
 
@@ -348,6 +350,7 @@ func runServeHTTP(ctx context.Context, client *Client, args []string, yesMode bo
 	routes, err := serve.HTTP(ctx, client, serve.HTTPOptions{
 		Mount:      fs.Arg(0),
 		Target:     target,
+		Priority:   *priority,
 		TTL:        ttlDuration,
 		Background: !watchMode,
 		Yes:        yesMode,
@@ -371,6 +374,8 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode b
 	listenAddr := fs.String("listen", ":443", "Listen address")
 	acme := fs.Bool("acme", true, "Enable automatic Let's Encrypt / ACME TLS cert")
 	noRedirect := fs.Bool("no-redirect", false, "Do not automatically create HTTP to HTTPS redirect route on port 80")
+	priority := fs.Int("priority", 0, "Route priority (0 for auto)")
+	fs.IntVar(priority, "p", 0, "Route priority (shorthand)")
 	_ = fs.Bool("bg", false, "Run in background mode")
 	_ = fs.Bool("d", false, "Run in background mode")
 
@@ -396,6 +401,7 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode b
 		Mount:      fs.Arg(0),
 		Target:     target,
 		ListenAddr: *listenAddr,
+		Priority:   *priority,
 		ACME:       *acme,
 		NoRedirect: *noRedirect,
 		TTL:        ttlDuration,
@@ -418,6 +424,8 @@ func runServeTCP(ctx context.Context, client *Client, args []string, yesMode boo
 
 	fs := flag.NewFlagSet("serve tcp", flag.ExitOnError)
 	ttlStr := fs.String("ttl", "", "Time to live duration")
+	priority := fs.Int("priority", 0, "Route priority (0 for auto)")
+	fs.IntVar(priority, "p", 0, "Route priority (shorthand)")
 	_ = fs.Bool("bg", false, "Run in background mode")
 	_ = fs.Bool("d", false, "Run in background mode")
 
@@ -441,6 +449,7 @@ func runServeTCP(ctx context.Context, client *Client, args []string, yesMode boo
 	routes, err := serve.TCP(ctx, client, serve.TCPOptions{
 		ListenPort: fs.Arg(0),
 		Target:     fs.Arg(1),
+		Priority:   *priority,
 		TTL:        ttlDuration,
 		Background: !watchMode,
 		Yes:        yesMode,
@@ -459,6 +468,8 @@ func runServeUDP(ctx context.Context, client *Client, args []string, yesMode boo
 
 	fs := flag.NewFlagSet("serve udp", flag.ExitOnError)
 	ttlStr := fs.String("ttl", "", "Time to live duration")
+	priority := fs.Int("priority", 0, "Route priority (0 for auto)")
+	fs.IntVar(priority, "p", 0, "Route priority (shorthand)")
 	_ = fs.Bool("bg", false, "Run in background mode")
 	_ = fs.Bool("d", false, "Run in background mode")
 
@@ -482,6 +493,7 @@ func runServeUDP(ctx context.Context, client *Client, args []string, yesMode boo
 	routes, err := serve.UDP(ctx, client, serve.UDPOptions{
 		ListenPort: fs.Arg(0),
 		Target:     fs.Arg(1),
+		Priority:   *priority,
 		TTL:        ttlDuration,
 		Background: !watchMode,
 		Yes:        yesMode,
@@ -500,6 +512,8 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMo
 
 	fs := flag.NewFlagSet("serve minecraft", flag.ExitOnError)
 	ttlStr := fs.String("ttl", "", "Time to live duration")
+	priority := fs.Int("priority", 0, "Route priority (0 for auto)")
+	fs.IntVar(priority, "p", 0, "Route priority (shorthand)")
 	_ = fs.Bool("bg", false, "Run in background mode")
 	_ = fs.Bool("d", false, "Run in background mode")
 
@@ -528,6 +542,7 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMo
 	routes, err := serve.Minecraft(ctx, client, serve.MinecraftOptions{
 		HostOrPort: fs.Arg(0),
 		Target:     arg1,
+		Priority:   *priority,
 		TTL:        ttlDuration,
 		Background: !watchMode,
 		Yes:        yesMode,
@@ -546,7 +561,15 @@ func runServeRedirect(ctx context.Context, client *Client, args []string, yesMod
 
 	fs := flag.NewFlagSet("serve redirect", flag.ExitOnError)
 	ttlStr := fs.String("ttl", "", "Time to live duration")
-	statusCode := fs.Int("code", 301, "HTTP status code for redirect (301 or 302)")
+	statusCode := fs.Int("code", 301, "HTTP status code for redirect (301, 302, 307, 308)")
+	exact := fs.Bool("exact", false, "Strict exact path matching (does not match subpaths)")
+	fs.BoolVar(exact, "e", false, "Strict exact path matching (shorthand)")
+	forwardPath := fs.Bool("forward-path", true, "Forward relative subpaths to target URL")
+	fs.BoolVar(forwardPath, "f", true, "Forward relative subpaths (shorthand)")
+	noForwardPath := fs.Bool("no-forward-path", false, "Do not append subpaths to target URL")
+	noQuery := fs.Bool("no-query", false, "Do not forward query parameters to target URL")
+	priority := fs.Int("priority", 0, "Route priority (0 for auto)")
+	fs.IntVar(priority, "p", 0, "Route priority (shorthand)")
 	_ = fs.Bool("bg", false, "Run in background mode")
 	_ = fs.Bool("d", false, "Run in background mode")
 
@@ -568,12 +591,16 @@ func runServeRedirect(ctx context.Context, client *Client, args []string, yesMod
 	}
 
 	routes, err := serve.Redirect(ctx, client, serve.RedirectOptions{
-		Mount:      fs.Arg(0),
-		TargetURL:  fs.Arg(1),
-		StatusCode: *statusCode,
-		TTL:        ttlDuration,
-		Background: !watchMode,
-		Yes:        yesMode,
+		Mount:         fs.Arg(0),
+		TargetURL:     fs.Arg(1),
+		StatusCode:    *statusCode,
+		Exact:         *exact,
+		NoForwardPath: *noForwardPath || !*forwardPath,
+		NoQuery:       *noQuery,
+		Priority:      *priority,
+		TTL:           ttlDuration,
+		Background:    !watchMode,
+		Yes:           yesMode,
 	})
 	if err != nil {
 		log.Fatalf("failed to serve redirect: %v", err)

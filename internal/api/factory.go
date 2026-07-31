@@ -294,8 +294,29 @@ func (f HTTPRedirectFactory) Build(spec HandlerSpec, buildNext BuildNextFunc) (a
 	status := 301
 	if s, ok := spec.Config["status"].(float64); ok {
 		status = int(s)
+	} else if s, ok := spec.Config["status"].(int); ok {
+		status = s
 	}
-	return &handlers.HTTPRedirect{URL: urlStr, Status: status}, nil
+
+	forwardPath := true
+	if fp, ok := spec.Config["forward_path"].(bool); ok {
+		forwardPath = fp
+	}
+
+	stripPrefix, _ := spec.Config["strip_prefix"].(string)
+
+	keepQuery := true
+	if kq, ok := spec.Config["keep_query"].(bool); ok {
+		keepQuery = kq
+	}
+
+	return &handlers.HTTPRedirect{
+		URL:         urlStr,
+		Status:      status,
+		ForwardPath: forwardPath,
+		StripPrefix: stripPrefix,
+		KeepQuery:   keepQuery,
+	}, nil
 }
 
 type HTTPStaticFactory struct{}

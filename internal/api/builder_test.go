@@ -44,7 +44,7 @@ func TestValidateAndBuildHandlers(t *testing.T) {
 			t.Errorf("expected http.Handler interface")
 		}
 
-		hRedirect, err := buildHandler("http", HandlerSpec{Type: "http_redirect", Config: map[string]any{"status": 302, "url": "https://example.com"}})
+		hRedirect, err := buildHandler("http", HandlerSpec{Type: "http_redirect", Config: map[string]any{"status": 301, "url": "https://example.com"}})
 		if err != nil {
 			t.Fatalf("buildHandler http_redirect failed: %v", err)
 		}

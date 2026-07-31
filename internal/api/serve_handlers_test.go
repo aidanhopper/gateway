@@ -544,3 +544,30 @@ func TestAPIServeDBRehydration(t *testing.T) {
 		t.Errorf("missing expected listeners after rehydration: http=%v tcp=%v", hasHTTPListener, hasTCPListener)
 	}
 }
+
+func TestHTTPSPublicDomainWithoutACMEEmail(t *testing.T) {
+	os.Unsetenv("GATEWAY_ACME_EMAIL")
+
+	apiInstance, _, token := setupTestAPI(t)
+	handler := NewHandler(apiInstance)
+
+	body := `{"mount":"dev.ahop.dev","target":"docker-server:8096"}`
+	req := httptest.NewRequest("POST", "/api/v1/serve/https", bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for public domain HTTPS serve without ACME email, got %d body: %s", rec.Code, rec.Body.String())
+	}
+
+	var routeResp RouteSpec
+	if err := json.Unmarshal(rec.Body.Bytes(), &routeResp); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	var count int
+	if err := apiInstance.db.QueryRow("SELECT COUNT(*) FROM listeners WHERE name = 'serve-https-443'").Scan(&count); err != nil || count != 1 {
+		t.Errorf("expected listener serve-https-443 to exist in DB, got count=%d err=%v", count, err)
+	}
+}

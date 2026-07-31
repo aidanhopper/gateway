@@ -506,7 +506,7 @@ func (a *API) handleCreateListener(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := a.gw.AddListener(gwListener); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("failed to bind listener on %s (%s): %v", spec.Address, spec.Protocol, err))
 		return
 	}
 

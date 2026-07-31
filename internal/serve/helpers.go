@@ -2,6 +2,7 @@ package serve
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"strings"
 
@@ -77,7 +78,40 @@ func ExtractHandlerTarget(h api.HandlerSpec) string {
 	return ""
 }
 
+// CalculateAutoPriority computes a priority score based on rule specificity unless an explicit priority (> 0) is specified.
+func CalculateAutoPriority(rule api.RuleSpec, explicitPriority int) int {
+	if explicitPriority > 0 {
+		return explicitPriority
+	}
+
+	priority := 1
+	domain, path := ExtractRuleDomainAndPath(rule)
+
+	if domain != "" {
+		priority += 100
+	}
+
+	if path != "" && path != "/" {
+		priority += 100 + len(path)*10
+	}
+
+	if rule.Type == "path" {
+		priority += 1000
+	} else if rule.Type == "and" || rule.Type == "or" {
+		for _, child := range rule.Rules {
+			if child.Type == "path" {
+				priority += 1000
+				break
+			}
+		}
+	}
+
+	return priority
+}
+
 // HasMatchingRoute checks whether a route matching listener, domain, path, and target already exists.
+// If a route exists for the exact same mount URL (listener, domain, path) but with a different target,
+// the old route is deleted so it can be updated/replaced cleanly.
 func HasMatchingRoute(ctx context.Context, client GatewayClient, listenerName, domain, path, target string) bool {
 	routes, err := client.ListRoutes(ctx)
 	if err != nil || len(routes) == 0 {
@@ -98,6 +132,8 @@ func HasMatchingRoute(ctx context.Context, client GatewayClient, listenerName, d
 			} else {
 				return true
 			}
+			// Route exists on the exact same mount URL with a different target -> remove old route to replace
+			_ = client.DeleteRoute(ctx, r.Name)
 		}
 	}
 	return false
@@ -248,7 +284,10 @@ func EnsureListener(ctx context.Context, client GatewayClient, name, addr, proto
 						spec := l
 						spec.TLS = &updatedTLS
 						_ = client.DeleteListener(ctx, l.Name)
-						_ = client.CreateListener(ctx, spec)
+						if createErr := client.CreateListener(ctx, spec); createErr != nil {
+							_ = client.CreateListener(ctx, l)
+							return "", fmt.Errorf("failed to update listener %s: %w", l.Name, createErr)
+						}
 					}
 				}
 				return l.Name, nil

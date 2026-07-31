@@ -3,6 +3,7 @@ package serve
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -595,6 +596,115 @@ func TestCleanupUnusedListenersSelective(t *testing.T) {
 	listeners, _ := client.ListListeners(ctx)
 	if len(listeners) != 1 || listeners[0].Name != "serve-http-80" {
 		t.Errorf("expected only serve-http-80 to remain, got %+v", listeners)
+	}
+}
+
+type errorCreateMockClient struct {
+	mockClient
+	listeners  map[string]api.ListenerSpec
+	failCreate bool
+}
+
+func (e *errorCreateMockClient) ListListeners(ctx context.Context) ([]api.ListenerSpec, error) {
+	var res []api.ListenerSpec
+	for _, l := range e.listeners {
+		res = append(res, l)
+	}
+	return res, nil
+}
+
+func (e *errorCreateMockClient) DeleteListener(ctx context.Context, name string) error {
+	delete(e.listeners, name)
+	return nil
+}
+
+func (e *errorCreateMockClient) CreateListener(ctx context.Context, spec api.ListenerSpec) error {
+	if e.failCreate {
+		return fmt.Errorf("mock create listener error")
+	}
+	e.listeners[spec.Name] = spec
+	return nil
+}
+
+func TestEnsureListenerErrorPropagation(t *testing.T) {
+	ctx := context.Background()
+	mc := &errorCreateMockClient{
+		listeners: map[string]api.ListenerSpec{
+			"serve-https-443": {Name: "serve-https-443", Address: ":443", Protocol: "tcp", TLS: &api.TLSConfigSpec{Domains: []string{"domain1.com"}}},
+		},
+	}
+
+	mc.failCreate = true
+	_, err := EnsureListener(ctx, mc, "serve-https-443", ":443", "tcp", &api.TLSConfigSpec{Domains: []string{"dev.ahop.dev"}})
+	if err == nil {
+		t.Fatal("expected EnsureListener to return error when CreateListener fails during update, got nil")
+	}
+}
+
+func TestCalculateAutoPriority(t *testing.T) {
+	rootRule := api.RuleSpec{
+		Type: "and",
+		Rules: []api.RuleSpec{
+			{Type: "secure"},
+			{Type: "host", Value: "dev.ahop.dev"},
+		},
+	}
+	rootPrio := CalculateAutoPriority(rootRule, 0)
+
+	subpathRule := api.RuleSpec{
+		Type: "and",
+		Rules: []api.RuleSpec{
+			{Type: "secure"},
+			{Type: "host", Value: "dev.ahop.dev"},
+			{Type: "path_prefix", Value: "/github"},
+		},
+	}
+	subpathPrio := CalculateAutoPriority(subpathRule, 0)
+
+	if subpathPrio <= rootPrio {
+		t.Fatalf("expected subpath route priority (%d) to be higher than root route priority (%d)", subpathPrio, rootPrio)
+	}
+
+	explicitPrio := CalculateAutoPriority(rootRule, 500)
+	if explicitPrio != 500 {
+		t.Fatalf("expected explicit priority 500, got %d", explicitPrio)
+	}
+}
+
+func TestHasMatchingRouteReplacement(t *testing.T) {
+	server, client := setupServeMockServer(t)
+	defer server.Close()
+	ctx := context.Background()
+
+	_ = client.CreateListener(ctx, api.ListenerSpec{Name: "serve-https-443", Address: ":443", Protocol: "tcp"})
+	_ = client.CreateRoute(ctx, api.RouteSpec{
+		Name:     "route1",
+		Protocol: "http",
+		Listener: "serve-https-443",
+		Rule: api.RuleSpec{
+			Type: "and",
+			Rules: []api.RuleSpec{
+				{Type: "host", Value: "dev.ahop.dev"},
+				{Type: "path_prefix", Value: "/github"},
+			},
+		},
+		Handler: api.HandlerSpec{
+			Type:   "http_redirect",
+			Config: map[string]any{"url": "https://github.com/oldtarget"},
+		},
+	})
+
+	if !HasMatchingRoute(ctx, client, "serve-https-443", "dev.ahop.dev", "/github", "https://github.com/oldtarget") {
+		t.Errorf("expected HasMatchingRoute to return true for identical target")
+	}
+
+	if HasMatchingRoute(ctx, client, "serve-https-443", "dev.ahop.dev", "/github", "https://github.com/newtarget") {
+		t.Errorf("expected HasMatchingRoute to return false for updated target")
+	}
+
+	routes, _ := client.ListRoutes(ctx)
+	if len(routes) != 0 {
+		t.Errorf("expected old route to be deleted on target mismatch, remaining routes: %d", len(routes))
 	}
 }
 

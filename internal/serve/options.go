@@ -6,6 +6,7 @@ import "time"
 type HTTPOptions struct {
 	Mount      string        `json:"mount"`
 	Target     string        `json:"target"`
+	Priority   int           `json:"priority,omitempty"`
 	TTL        time.Duration `json:"ttl,omitempty"`
 	Background bool          `json:"background,omitempty"`
 	Yes        bool          `json:"yes,omitempty"`
@@ -16,6 +17,7 @@ type HTTPSOptions struct {
 	Mount       string        `json:"mount"`
 	Target      string        `json:"target"`
 	ListenAddr  string        `json:"listen_addr,omitempty"`
+	Priority    int           `json:"priority,omitempty"`
 	ACME        bool          `json:"acme,omitempty"`
 	NoRedirect  bool          `json:"no_redirect,omitempty"`
 	StripPrefix bool          `json:"strip_prefix,omitempty"`
@@ -28,6 +30,7 @@ type HTTPSOptions struct {
 type TCPOptions struct {
 	ListenPort string        `json:"listen_port"`
 	Target     string        `json:"target"`
+	Priority   int           `json:"priority,omitempty"`
 	TTL        time.Duration `json:"ttl,omitempty"`
 	Background bool          `json:"background,omitempty"`
 	Yes        bool          `json:"yes,omitempty"`
@@ -37,6 +40,7 @@ type TCPOptions struct {
 type UDPOptions struct {
 	ListenPort string        `json:"listen_port"`
 	Target     string        `json:"target"`
+	Priority   int           `json:"priority,omitempty"`
 	TTL        time.Duration `json:"ttl,omitempty"`
 	Background bool          `json:"background,omitempty"`
 	Yes        bool          `json:"yes,omitempty"`
@@ -46,6 +50,7 @@ type UDPOptions struct {
 type MinecraftOptions struct {
 	HostOrPort string        `json:"host_or_port"`
 	Target     string        `json:"target,omitempty"`
+	Priority   int           `json:"priority,omitempty"`
 	TTL        time.Duration `json:"ttl,omitempty"`
 	Background bool          `json:"background,omitempty"`
 	Yes        bool          `json:"yes,omitempty"`
@@ -53,9 +58,23 @@ type MinecraftOptions struct {
 
 // RedirectOptions configures an HTTP/HTTPS redirect serve mount.
 type RedirectOptions struct {
+	Mount         string        `json:"mount"`
+	TargetURL     string        `json:"target_url"`
+	StatusCode    int           `json:"status_code,omitempty"`
+	Exact         bool          `json:"exact,omitempty"`
+	NoForwardPath bool          `json:"no_forward_path,omitempty"`
+	NoQuery       bool          `json:"no_query,omitempty"`
+	Priority      int           `json:"priority,omitempty"`
+	TTL           time.Duration `json:"ttl,omitempty"`
+	Background    bool          `json:"background,omitempty"`
+	Yes           bool          `json:"yes,omitempty"`
+}
+
+// StaticOptions configures a static directory or single-page application serve mount.
+type StaticOptions struct {
 	Mount      string        `json:"mount"`
-	TargetURL  string        `json:"target_url"`
-	StatusCode int           `json:"status_code,omitempty"`
+	Dir        string        `json:"dir"`
+	Priority   int           `json:"priority,omitempty"`
 	TTL        time.Duration `json:"ttl,omitempty"`
 	Background bool          `json:"background,omitempty"`
 	Yes        bool          `json:"yes,omitempty"`

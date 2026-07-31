@@ -104,10 +104,13 @@ func (h *HTTPHeaders) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HTTPRedirect performs HTTP 301/302 URL redirects.
+// HTTPRedirect performs HTTP 301/302/307/308 URL redirects.
 type HTTPRedirect struct {
-	URL    string
-	Status int
+	URL         string
+	Status      int
+	ForwardPath bool
+	StripPrefix string
+	KeepQuery   bool
 }
 
 func (h *HTTPRedirect) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -126,14 +129,31 @@ func (h *HTTPRedirect) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		targetURL = "https://" + host + reqURI
 	} else if strings.HasPrefix(targetURL, "https://") || strings.HasPrefix(targetURL, "http://") {
-		schemeEnd := strings.Index(targetURL, "://")
-		if schemeEnd != -1 {
-			rest := targetURL[schemeEnd+3:]
-			pathStart := strings.Index(rest, "/")
-			if pathStart == -1 || rest[pathStart:] == "/" {
-				base := strings.TrimRight(targetURL, "/")
-				targetURL = base + reqURI
+		if h.ForwardPath {
+			reqPath := r.URL.Path
+			subPath := reqPath
+			if h.StripPrefix != "" {
+				subPath = strings.TrimPrefix(reqPath, h.StripPrefix)
 			}
+			targetURL = strings.TrimRight(targetURL, "/") + "/" + strings.TrimLeft(subPath, "/")
+		} else if strings.HasSuffix(targetURL, "/") {
+			schemeEnd := strings.Index(targetURL, "://")
+			if schemeEnd != -1 {
+				rest := targetURL[schemeEnd+3:]
+				pathStart := strings.Index(rest, "/")
+				if pathStart == -1 || rest[pathStart:] == "/" {
+					base := strings.TrimRight(targetURL, "/")
+					targetURL = base + reqURI
+				}
+			}
+		}
+	}
+
+	if h.KeepQuery && r.URL.RawQuery != "" {
+		if strings.Contains(targetURL, "?") {
+			targetURL += "&" + r.URL.RawQuery
+		} else {
+			targetURL += "?" + r.URL.RawQuery
 		}
 	}
 

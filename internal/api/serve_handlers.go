@@ -11,9 +11,10 @@ import (
 
 // ServeRequestHTTP holds payload for POST /api/v1/serve/http
 type ServeRequestHTTP struct {
-	Mount  string `json:"mount"`
-	Target string `json:"target"`
-	TTL    int    `json:"ttl,omitempty"`
+	Mount    string `json:"mount"`
+	Target   string `json:"target"`
+	Priority int    `json:"priority,omitempty"`
+	TTL      int    `json:"ttl,omitempty"`
 }
 
 // ServeRequestHTTPS holds payload for POST /api/v1/serve/https
@@ -21,6 +22,7 @@ type ServeRequestHTTPS struct {
 	Mount      string `json:"mount"`
 	Target     string `json:"target"`
 	ListenAddr string `json:"listen_addr,omitempty"`
+	Priority   int    `json:"priority,omitempty"`
 	ACME       bool   `json:"acme,omitempty"`
 	NoRedirect bool   `json:"no_redirect,omitempty"`
 	TTL        int    `json:"ttl,omitempty"`
@@ -30,6 +32,7 @@ type ServeRequestHTTPS struct {
 type ServeRequestStatic struct {
 	Mount      string `json:"mount"`
 	LocalPath  string `json:"local_path"`
+	Priority   int    `json:"priority,omitempty"`
 	IsSPA      bool   `json:"is_spa,omitempty"`
 	IsFile     bool   `json:"is_file,omitempty"`
 	IsHTTP     bool   `json:"is_http,omitempty"`
@@ -39,16 +42,21 @@ type ServeRequestStatic struct {
 
 // ServeRequestRedirect holds payload for POST /api/v1/serve/redirect
 type ServeRequestRedirect struct {
-	Mount      string `json:"mount"`
-	TargetURL  string `json:"target_url"`
-	StatusCode int    `json:"status_code,omitempty"`
-	TTL        int    `json:"ttl,omitempty"`
+	Mount         string `json:"mount"`
+	TargetURL     string `json:"target_url"`
+	StatusCode    int    `json:"status_code,omitempty"`
+	Exact         bool   `json:"exact,omitempty"`
+	NoForwardPath bool   `json:"no_forward_path,omitempty"`
+	NoQuery       bool   `json:"no_query,omitempty"`
+	Priority      int    `json:"priority,omitempty"`
+	TTL           int    `json:"ttl,omitempty"`
 }
 
 // ServeRequestPort holds payload for POST /api/v1/serve/tcp and udp
 type ServeRequestPort struct {
 	ListenPort string `json:"listen_port"`
 	Target     string `json:"target"`
+	Priority   int    `json:"priority,omitempty"`
 	TTL        int    `json:"ttl,omitempty"`
 }
 
@@ -56,6 +64,7 @@ type ServeRequestPort struct {
 type ServeRequestMinecraft struct {
 	HostOrPort string `json:"host_or_port"`
 	Target     string `json:"target,omitempty"`
+	Priority   int    `json:"priority,omitempty"`
 	TTL        int    `json:"ttl,omitempty"`
 }
 
@@ -206,7 +215,7 @@ func (a *API) handleServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Name:     routeName,
 		Protocol: "http",
 		Listener: listenerName,
-		Priority: 1,
+		Priority: calculateServeAutoPriority(ruleSpec, req.Priority),
 		TTL:      req.TTL,
 		Rule:     ruleSpec,
 		Handler:  handlerSpec,
@@ -245,9 +254,9 @@ func (a *API) handleServeHTTPS(w http.ResponseWriter, r *http.Request) {
 	lName := fmt.Sprintf("serve-https-%s", strings.TrimPrefix(lAddr, ":"))
 
 	var tlsSpec *TLSConfigSpec
-	useACME := req.ACME || domainVal != ""
-	if useACME {
-		tlsSpec = &TLSConfigSpec{Auto: true}
+	useACME := req.ACME
+	if useACME || domainVal != "" {
+		tlsSpec = &TLSConfigSpec{Auto: useACME}
 		if domainVal != "" {
 			tlsSpec.Domains = []string{domainVal}
 		}
@@ -298,7 +307,7 @@ func (a *API) handleServeHTTPS(w http.ResponseWriter, r *http.Request) {
 		Name:     routeName,
 		Protocol: "http",
 		Listener: lName,
-		Priority: 1,
+		Priority: calculateServeAutoPriority(ruleSpec, req.Priority),
 		TTL:      req.TTL,
 		Rule:     ruleSpec,
 		Handler:  handlerSpec,
@@ -332,7 +341,7 @@ func (a *API) handleServeHTTPS(w http.ResponseWriter, r *http.Request) {
 			Name:     redirectRouteName,
 			Protocol: "http",
 			Listener: "serve-http-80",
-			Priority: 1,
+			Priority: calculateServeAutoPriority(rRuleSpec, req.Priority),
 			TTL:      req.TTL,
 			Rule:     rRuleSpec,
 			Handler: HandlerSpec{
@@ -437,7 +446,7 @@ func (a *API) handleServeStatic(w http.ResponseWriter, r *http.Request) {
 		Name:     routeName,
 		Protocol: "http",
 		Listener: lName,
-		Priority: 1,
+		Priority: calculateServeAutoPriority(ruleSpec, req.Priority),
 		TTL:      req.TTL,
 		Rule:     ruleSpec,
 		Handler:  handlerSpec,
@@ -470,12 +479,25 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := req.StatusCode
-	if status != 301 && status != 302 {
+	if status != 301 && status != 302 && status != 307 && status != 308 {
 		status = 301
 	}
 
 	_ = a.ensureListenerInternal(ListenerSpec{Name: "serve-https-443", Address: ":443", Protocol: "tcp", TLS: &TLSConfigSpec{Auto: true, Domains: []string{domain}}})
 	_ = a.ensureListenerInternal(ListenerSpec{Name: "serve-http-80", Address: ":80", Protocol: "tcp"})
+
+	pathRuleType := "path_prefix"
+	if req.Exact {
+		pathRuleType = "path"
+	}
+
+	handlerConfig := map[string]any{
+		"url":          targetURL,
+		"status":       float64(status),
+		"forward_path": !req.NoForwardPath,
+		"strip_prefix": path,
+		"keep_query":   !req.NoQuery,
+	}
 
 	httpsRouteName := fmt.Sprintf("serve-redirect-https-%d", time.Now().UnixNano())
 	var rules []RuleSpec
@@ -484,7 +506,7 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 		rules = append(rules, RuleSpec{Type: "host", Value: domain})
 	}
 	if path != "/" && path != "" {
-		rules = append(rules, RuleSpec{Type: "path_prefix", Value: path})
+		rules = append(rules, RuleSpec{Type: pathRuleType, Value: path})
 	}
 	ruleSpec := rules[0]
 	if len(rules) > 1 {
@@ -495,12 +517,12 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 		Name:     httpsRouteName,
 		Protocol: "http",
 		Listener: "serve-https-443",
-		Priority: 1,
+		Priority: calculateServeAutoPriority(ruleSpec, req.Priority),
 		TTL:      req.TTL,
 		Rule:     ruleSpec,
 		Handler: HandlerSpec{
 			Type:   "http_redirect",
-			Config: map[string]any{"url": targetURL, "status": float64(status)},
+			Config: handlerConfig,
 		},
 	}
 	_ = a.AddRoute(httpsRoute)
@@ -512,7 +534,7 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 		rRules = append(rRules, RuleSpec{Type: "host", Value: domain})
 	}
 	if path != "/" && path != "" {
-		rRules = append(rRules, RuleSpec{Type: "path_prefix", Value: path})
+		rRules = append(rRules, RuleSpec{Type: pathRuleType, Value: path})
 	}
 	rRuleSpec := rRules[0]
 	if len(rRules) > 1 {
@@ -523,12 +545,12 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 		Name:     httpRouteName,
 		Protocol: "http",
 		Listener: "serve-http-80",
-		Priority: 1,
+		Priority: calculateServeAutoPriority(rRuleSpec, req.Priority),
 		TTL:      req.TTL,
 		Rule:     rRuleSpec,
 		Handler: HandlerSpec{
 			Type:   "http_redirect",
-			Config: map[string]any{"url": targetURL, "status": float64(status)},
+			Config: handlerConfig,
 		},
 	}
 	_ = a.AddRoute(httpRoute)
@@ -573,7 +595,7 @@ func (a *API) handleServeTCP(w http.ResponseWriter, r *http.Request) {
 		Name:     routeName,
 		Protocol: "tcp",
 		Listener: listenerName,
-		Priority: 1,
+		Priority: calculateServeAutoPriority(RuleSpec{Type: "any"}, req.Priority),
 		TTL:      req.TTL,
 		Rule:     RuleSpec{Type: "any"},
 		Handler: HandlerSpec{
@@ -622,7 +644,7 @@ func (a *API) handleServeUDP(w http.ResponseWriter, r *http.Request) {
 		Name:     routeName,
 		Protocol: "udp",
 		Listener: listenerName,
-		Priority: 1,
+		Priority: calculateServeAutoPriority(RuleSpec{Type: "any"}, req.Priority),
 		TTL:      req.TTL,
 		Rule:     RuleSpec{Type: "any"},
 		Handler: HandlerSpec{
@@ -699,7 +721,7 @@ func (a *API) handleServeMinecraft(w http.ResponseWriter, r *http.Request) {
 		Name:     routeName,
 		Protocol: "tcp",
 		Listener: listenerName,
-		Priority: 1,
+		Priority: calculateServeAutoPriority(ruleSpec, req.Priority),
 		TTL:      req.TTL,
 		Rule:     ruleSpec,
 		Handler: HandlerSpec{
@@ -801,6 +823,43 @@ func (a *API) ensureListenerInternal(spec ListenerSpec) error {
 	a.mu.RLock()
 	for _, l := range a.listeners {
 		if l.Name == spec.Name || (l.Address == spec.Address && l.Protocol == spec.Protocol) {
+			if spec.TLS != nil {
+				needUpdate := false
+				var newDomains []string
+				if l.TLS != nil {
+					newDomains = append([]string{}, l.TLS.Domains...)
+				}
+				domainMap := make(map[string]bool)
+				for _, d := range newDomains {
+					domainMap[d] = true
+				}
+				for _, d := range spec.TLS.Domains {
+					if d != "" && !domainMap[d] {
+						domainMap[d] = true
+						newDomains = append(newDomains, d)
+						needUpdate = true
+					}
+				}
+				if l.TLS == nil || needUpdate {
+					a.mu.RUnlock()
+					updatedSpec := l
+					autoTLS := spec.TLS.Auto
+					if l.TLS != nil && l.TLS.Auto {
+						autoTLS = true
+					}
+					updatedSpec.TLS = &TLSConfigSpec{
+						Auto:    autoTLS,
+						Domains: newDomains,
+						Cert:    spec.TLS.Cert,
+						Key:     spec.TLS.Key,
+					}
+					if updatedSpec.TLS.Cert == "" && l.TLS != nil {
+						updatedSpec.TLS.Cert = l.TLS.Cert
+						updatedSpec.TLS.Key = l.TLS.Key
+					}
+					return a.AddListener(updatedSpec)
+				}
+			}
 			a.mu.RUnlock()
 			return nil
 		}
@@ -891,4 +950,57 @@ func FormatTTLRemaining(now time.Time, ttlSeconds int) string {
 		return fmt.Sprintf("%dm", int(rem.Minutes()))
 	}
 	return fmt.Sprintf("%ds", int(rem.Seconds()))
+}
+
+func calculateServeAutoPriority(rule RuleSpec, explicitPriority int) int {
+	if explicitPriority > 0 {
+		return explicitPriority
+	}
+
+	priority := 1
+	domain, path := extractRuleDomainAndPathAPI(rule)
+
+	if domain != "" {
+		priority += 100
+	}
+
+	if path != "" && path != "/" {
+		priority += 100 + len(path)*10
+	}
+
+	if rule.Type == "path" {
+		priority += 1000
+	} else if rule.Type == "and" || rule.Type == "or" {
+		for _, child := range rule.Rules {
+			if child.Type == "path" {
+				priority += 1000
+				break
+			}
+		}
+	}
+
+	return priority
+}
+
+func extractRuleDomainAndPathAPI(rule RuleSpec) (string, string) {
+	if rule.Type == "host" {
+		return rule.Value, ""
+	}
+	if rule.Type == "path_prefix" || rule.Type == "path" {
+		return "", rule.Value
+	}
+	if rule.Type == "and" || rule.Type == "or" {
+		var domain, path string
+		for _, child := range rule.Rules {
+			d, p := extractRuleDomainAndPathAPI(child)
+			if d != "" {
+				domain = d
+			}
+			if p != "" {
+				path = p
+			}
+		}
+		return domain, path
+	}
+	return "", ""
 }
