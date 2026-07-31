@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"log"
 	"math/rand"
 	"net"
 	"strings"
@@ -84,7 +83,7 @@ func (p *UDPLoadBalancer) ServeUDP(conn net.Conn, metadata gateway.UDPMetadata) 
 
 	upstream, err := net.Dial("udp", target)
 	if err != nil {
-		log.Printf("udp_proxy: dial target %s error: %v\n", target, err)
+		gateway.LogError("UDP", "dial target %s error: %v", target, err)
 		return
 	}
 	defer upstream.Close()

@@ -6,9 +6,9 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -52,7 +52,11 @@ func logSystemFallback(level, component, format string, args ...any) {
 	lvlPadded := fmt.Sprintf("%-5s", strings.ToUpper(strings.TrimSpace(level)))
 	compPadded := fmt.Sprintf("%-8s", strings.ToUpper(strings.TrimSpace(component)))
 	msg := fmt.Sprintf(format, args...)
-	log.Printf("[%s] [%s] [%s] %s\n", timeStr, lvlPadded, compPadded, msg)
+	out := os.Stdout
+	if strings.ToUpper(strings.TrimSpace(level)) == "ERROR" {
+		out = os.Stderr
+	}
+	fmt.Fprintf(out, "[%s] [%s] [%s] %s\n", timeStr, lvlPadded, compPadded, msg)
 }
 
 // LogInfo logs an informational message.
@@ -355,7 +359,7 @@ func (gw *Gateway) handleConnection(ctx context.Context, lnName string, conn net
 	protocol, err := getProtocol(conn.LocalAddr().Network())
 	if err != nil {
 		conn.Close()
-		log.Println(err)
+		LogWarn("LISTENER", "accept error: %v", err)
 		return
 	}
 
@@ -438,7 +442,7 @@ func (gw *Gateway) handleTCPConnection(ctx context.Context, lnName string, conn 
 		gw.mu.RUnlock()
 		if !ok {
 			conn.Close()
-			log.Printf("could not get listener state for %s\n", lnName)
+			LogError("LISTENER", "could not get listener state for %s", lnName)
 			return
 		}
 
@@ -700,7 +704,7 @@ func (gw *Gateway) handleUDPConnection(ctx context.Context, lnName string, pc ne
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("listener %s: read error: %v\n", lnName, err)
+				LogError("LISTENER", "listener %s: read error: %v", lnName, err)
 				return
 			}
 		}

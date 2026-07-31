@@ -182,6 +182,13 @@ func RunDaemon(args []string) {
 	// there is no --public flag by design.
 	isPublic := defaults.Public
 
+	// Disable standard log flags so third-party or stdlib log calls don't prepend timestamps on top of formatted logs.
+	log.SetFlags(0)
+	gateway.SystemLogger = api.LogSystem
+	firewall.Logger = func(level, format string, args ...any) {
+		api.LogSystem(level, "FIREWALL", format, args...)
+	}
+
 	db, err := api.OpenDB(*dbPath)
 	if err != nil {
 		log.Fatalf("failed to open database at %s: %v", *dbPath, err)

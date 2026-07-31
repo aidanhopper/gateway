@@ -1,11 +1,13 @@
 package api
 
 import (
+	"crypto/rand"
 	"crypto/tls"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"runtime"
@@ -69,6 +71,7 @@ func New(gw *gateway.Gateway, db *sql.DB, fw firewall.Manager, isPublic bool) (*
 	}
 
 	// Wire gateway and firewall system loggers into the SSE broadcasters.
+	log.SetFlags(0)
 	gateway.SystemLogger = LogSystem
 	firewall.Logger = func(level, format string, args ...any) {
 		LogSystem(level, "FIREWALL", format, args...)
@@ -84,6 +87,9 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 	if spec == nil {
 		return nil, nil
 	}
+
+	var sessionTicketKey [32]byte
+	_, _ = rand.Read(sessionTicketKey[:])
 
 	devCert, _ := acme.GenerateSelfSignedCert(spec.Domains)
 
@@ -148,8 +154,9 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 					certs = []tls.Certificate{*cert}
 				}
 				return &tls.Config{
-					Certificates:   certs,
-					GetCertificate: getCertFunc,
+					Certificates:     certs,
+					GetCertificate:   getCertFunc,
+					SessionTicketKey: sessionTicketKey,
 				}, nil
 			}), nil
 		}
@@ -158,16 +165,21 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 	if spec.Cert != "" && spec.Key != "" {
 		cert, err := tls.X509KeyPair([]byte(spec.Cert), []byte(spec.Key))
 		if err == nil {
-			return gateway.TLSConfigHandlerFunc(func(info *gateway.TLSInfo) (*tls.Config, error) {
-				return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
-			}), nil
+		tlsConfig := &tls.Config{
+			Certificates:     []tls.Certificate{cert},
+			SessionTicketKey: sessionTicketKey,
+		}
+		return gateway.TLSConfigHandlerFunc(func(info *gateway.TLSInfo) (*tls.Config, error) {
+			return tlsConfig, nil
+		}), nil
 		}
 	}
 
 	// Default fallback: Generate self-signed cert for local dev HTTPS (.localhost, localhost, or when ACME email is unset)
 	if devCert != nil {
 		tlsConfig := &tls.Config{
-			Certificates: []tls.Certificate{*devCert},
+			Certificates:     []tls.Certificate{*devCert},
+			SessionTicketKey: sessionTicketKey,
 		}
 		return gateway.TLSConfigHandlerFunc(func(info *gateway.TLSInfo) (*tls.Config, error) {
 			return tlsConfig, nil

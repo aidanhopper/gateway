@@ -12,7 +12,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"log"
 	"math/big"
 	"net"
 	"os"
@@ -22,11 +21,83 @@ import (
 	"time"
 
 	"github.com/aidanhopper/gateway/internal/config"
+	"github.com/aidanhopper/gateway/internal/gateway"
 	"github.com/go-acme/lego/v4/certificate"
 	"github.com/go-acme/lego/v4/lego"
+	legolog "github.com/go-acme/lego/v4/log"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
 )
+
+type acmeLoggerAdapter struct{}
+
+func (a *acmeLoggerAdapter) Fatal(args ...interface{}) {
+	msg := strings.TrimSpace(fmt.Sprintln(args...))
+	a.log("ERROR", msg)
+	os.Exit(1)
+}
+
+func (a *acmeLoggerAdapter) Fatalf(format string, args ...interface{}) {
+	msg := strings.TrimSpace(fmt.Sprintf(format, args...))
+	a.log("ERROR", msg)
+	os.Exit(1)
+}
+
+func (a *acmeLoggerAdapter) Fatalln(args ...interface{}) {
+	msg := strings.TrimSpace(fmt.Sprintln(args...))
+	a.log("ERROR", msg)
+	os.Exit(1)
+}
+
+func (a *acmeLoggerAdapter) Print(args ...interface{}) {
+	msg := strings.TrimSpace(fmt.Sprint(args...))
+	a.log("INFO", msg)
+}
+
+func (a *acmeLoggerAdapter) Printf(format string, args ...interface{}) {
+	msg := strings.TrimSpace(fmt.Sprintf(format, args...))
+	a.log("INFO", msg)
+}
+
+func (a *acmeLoggerAdapter) Println(args ...interface{}) {
+	msg := strings.TrimSpace(fmt.Sprintln(args...))
+	a.log("INFO", msg)
+}
+
+func (a *acmeLoggerAdapter) log(defaultLevel, msg string) {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return
+	}
+	level := defaultLevel
+	if strings.HasPrefix(msg, "[INFO]") {
+		level = "INFO"
+		msg = strings.TrimSpace(strings.TrimPrefix(msg, "[INFO]"))
+	} else if strings.HasPrefix(msg, "[WARN]") || strings.HasPrefix(msg, "[WARNING]") {
+		level = "WARN"
+		msg = strings.TrimPrefix(msg, "[WARN]")
+		msg = strings.TrimPrefix(msg, "[WARNING]")
+		msg = strings.TrimSpace(msg)
+	} else if strings.HasPrefix(msg, "[ERR]") || strings.HasPrefix(msg, "[ERROR]") {
+		level = "ERROR"
+		msg = strings.TrimPrefix(msg, "[ERR]")
+		msg = strings.TrimPrefix(msg, "[ERROR]")
+		msg = strings.TrimSpace(msg)
+	}
+
+	switch level {
+	case "WARN", "WARNING":
+		gateway.LogWarn("ACME", "%s", msg)
+	case "ERROR", "ERR":
+		gateway.LogError("ACME", "%s", msg)
+	default:
+		gateway.LogInfo("ACME", "%s", msg)
+	}
+}
+
+func init() {
+	legolog.Logger = &acmeLoggerAdapter{}
+}
 
 // GenerateSelfSignedCert creates an in-memory self-signed tls.Certificate valid for localhost, IPs, and given domains.
 func GenerateSelfSignedCert(dnsNames []string) (*tls.Certificate, error) {
@@ -500,7 +571,7 @@ func (m *Manager) ObtainWildcardCertificate(domain string) (*tls.Certificate, er
 	}
 
 	if retryAfter, limited := m.isRateLimited(rootDomain); limited {
-		log.Printf("[INFO ] [ACME    ] domain %s is rate-limited by Let's Encrypt until %v, using staging...", rootDomain, retryAfter.Format("2006-01-02 15:04:05 MST"))
+		gateway.LogInfo("ACME", "domain %s is rate-limited by Let's Encrypt until %v, using staging...", rootDomain, retryAfter.Format("2006-01-02 15:04:05 MST"))
 		return m.obtainStagingCertificate(request, rootDomain, domain)
 	}
 
@@ -513,7 +584,7 @@ func (m *Manager) ObtainWildcardCertificate(domain string) (*tls.Certificate, er
 		if strings.Contains(err.Error(), "rateLimited") || strings.Contains(err.Error(), "too many certificates") {
 			retryAfter := parseRetryAfter(err.Error())
 			m.recordRateLimit(rootDomain, retryAfter)
-			log.Printf("[WARN ] [ACME    ] production rate limit hit for %s (retry after %v), falling back to Let's Encrypt staging...", rootDomain, retryAfter.Format("2006-01-02 15:04:05 MST"))
+			gateway.LogWarn("ACME", "production rate limit hit for %s (retry after %v), falling back to Let's Encrypt staging...", rootDomain, retryAfter.Format("2006-01-02 15:04:05 MST"))
 			return m.obtainStagingCertificate(request, rootDomain, domain)
 		}
 		if err != nil {

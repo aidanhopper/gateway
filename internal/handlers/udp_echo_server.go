@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"io"
-	"log"
 	"net"
 
 	"github.com/aidanhopper/gateway/internal/gateway"
@@ -20,13 +19,13 @@ func (s *udpEchoServer) ServeUDP(conn net.Conn, metadata gateway.UDPMetadata) {
 		n, err := conn.Read(buf)
 		if err != nil {
 			if err != io.EOF {
-				log.Printf("udp echo: read error: %v\n", err)
+				gateway.LogError("UDP", "echo read error: %v", err)
 			}
 			return
 		}
 
 		if _, err := conn.Write(buf[:n]); err != nil {
-			log.Printf("udp echo: write error: %v\n", err)
+			gateway.LogError("UDP", "echo write error: %v", err)
 			return
 		}
 	}

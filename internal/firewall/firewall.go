@@ -105,8 +105,15 @@ func logFirewall(level, format string, args ...any) {
 		return
 	}
 	timeStr := time.Now().Format("2006-01-02 15:04:05")
-	lvlPadded := fmt.Sprintf("%-5s", strings.ToUpper(strings.TrimSpace(level)))
-	log.Printf("[%s] [%s] [FIREWALL] %s\n", timeStr, lvlPadded, fmt.Sprintf(format, args...))
+	cleanLvl := strings.ToUpper(strings.TrimSpace(level))
+	lvlPadded := fmt.Sprintf("%-5s", cleanLvl)
+	compPadded := fmt.Sprintf("%-8s", "FIREWALL")
+	msg := fmt.Sprintf(format, args...)
+	out := os.Stdout
+	if cleanLvl == "ERROR" {
+		out = os.Stderr
+	}
+	fmt.Fprintf(out, "[%s] [%s] [%s] %s\n", timeStr, lvlPadded, compPadded, msg)
 }
 
 func (pm *ProtectedManager) OpenPort(protocol string, port int) error {
