@@ -392,11 +392,19 @@ func isProductionCert(cert *tls.Certificate) bool {
 	return true
 }
 
-func (m *Manager) isCertValidAndUsable(cert *tls.Certificate) bool {
+func (m *Manager) isCertValidAndUsable(cert *tls.Certificate, domains ...string) bool {
 	if !isCertValid(cert) {
 		return false
 	}
 	if m.isProduction && !isProductionCert(cert) {
+		for _, d := range domains {
+			if d != "" {
+				rootDomain := ExtractRootDomain(d)
+				if _, limited := m.isRateLimited(rootDomain); limited {
+					return true
+				}
+			}
+		}
 		return false
 	}
 	return true
@@ -551,15 +559,15 @@ func (m *Manager) ObtainWildcardCertificate(domain string) (*tls.Certificate, er
 	wildcardDomain := "*." + rootDomain
 
 	m.mu.RLock()
-	if existingCert, ok := m.certs[rootDomain]; ok && m.isCertValidAndUsable(existingCert) {
+	if existingCert, ok := m.certs[rootDomain]; ok && m.isCertValidAndUsable(existingCert, rootDomain) {
 		m.mu.RUnlock()
 		return existingCert, nil
 	}
-	if existingCert, ok := m.certs[wildcardDomain]; ok && m.isCertValidAndUsable(existingCert) {
+	if existingCert, ok := m.certs[wildcardDomain]; ok && m.isCertValidAndUsable(existingCert, wildcardDomain) {
 		m.mu.RUnlock()
 		return existingCert, nil
 	}
-	if existingCert, ok := m.certs[domain]; ok && m.isCertValidAndUsable(existingCert) {
+	if existingCert, ok := m.certs[domain]; ok && m.isCertValidAndUsable(existingCert, domain) {
 		m.mu.RUnlock()
 		return existingCert, nil
 	}
