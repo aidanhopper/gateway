@@ -238,6 +238,8 @@ func TestAPIServeStaticHTTPAndHTTPS(t *testing.T) {
 }
 
 func TestAPIServeRedirectEndpoint(t *testing.T) {
+	os.Unsetenv("GATEWAY_ACME_EMAIL")
+
 	apiInstance, _, token := setupTestAPI(t)
 	handler := NewHandler(apiInstance)
 

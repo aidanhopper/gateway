@@ -70,6 +70,7 @@ type RedirectOptions struct {
 	TTL           time.Duration `json:"ttl,omitempty"`
 	Background    bool          `json:"background,omitempty"`
 	Yes           bool          `json:"yes,omitempty"`
+	ACME          bool          `json:"acme,omitempty"`
 }
 
 // StaticOptions configures a static directory or single-page application serve mount.

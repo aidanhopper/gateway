@@ -50,6 +50,7 @@ type ServeRequestRedirect struct {
 	NoQuery       bool   `json:"no_query,omitempty"`
 	Priority      int    `json:"priority,omitempty"`
 	TTL           int    `json:"ttl,omitempty"`
+	ACME          bool   `json:"acme,omitempty"`
 }
 
 // ServeRequestPort holds payload for POST /api/v1/serve/tcp and udp
@@ -483,7 +484,7 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 		status = 301
 	}
 
-	_ = a.ensureListenerInternal(ListenerSpec{Name: "serve-https-443", Address: ":443", Protocol: "tcp", TLS: &TLSConfigSpec{Auto: true, Domains: []string{domain}}})
+	_ = a.ensureListenerInternal(ListenerSpec{Name: "serve-https-443", Address: ":443", Protocol: "tcp", TLS: &TLSConfigSpec{Auto: req.ACME, Domains: []string{domain}}})
 	_ = a.ensureListenerInternal(ListenerSpec{Name: "serve-http-80", Address: ":80", Protocol: "tcp"})
 
 	pathRuleType := "path_prefix"

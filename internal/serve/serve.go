@@ -497,7 +497,7 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 	var createdRoutes []string
 
 	tlsSpec := &api.TLSConfigSpec{
-		Auto: true,
+		Auto: opts.ACME,
 	}
 	if domain != "" {
 		tlsSpec.Domains = []string{domain}
