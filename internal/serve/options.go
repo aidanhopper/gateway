@@ -48,12 +48,14 @@ type UDPOptions struct {
 
 // MinecraftOptions configures a Minecraft server serve mount.
 type MinecraftOptions struct {
-	HostOrPort string        `json:"host_or_port"`
-	Target     string        `json:"target,omitempty"`
-	Priority   int           `json:"priority,omitempty"`
-	TTL        time.Duration `json:"ttl,omitempty"`
-	Background bool          `json:"background,omitempty"`
-	Yes        bool          `json:"yes,omitempty"`
+	HostOrPort   string        `json:"host_or_port"`
+	Target       string        `json:"target,omitempty"`
+	AllowPlayers []string      `json:"allow_players,omitempty"`
+	DenyPlayers  []string      `json:"deny_players,omitempty"`
+	Priority     int           `json:"priority,omitempty"`
+	TTL          time.Duration `json:"ttl,omitempty"`
+	Background   bool          `json:"background,omitempty"`
+	Yes          bool          `json:"yes,omitempty"`
 }
 
 // RedirectOptions configures an HTTP/HTTPS redirect serve mount.

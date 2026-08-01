@@ -443,6 +443,55 @@ func TestServeMinecraftPositionalArgs(t *testing.T) {
 	}
 }
 
+func TestServeMinecraftWhitelistBlacklist(t *testing.T) {
+	server, client := setupServeMockServer(t)
+	defer server.Close()
+	ctx := context.Background()
+
+	_, err := Minecraft(ctx, client, MinecraftOptions{
+		HostOrPort:   "only-didscare.ahop.dev",
+		Target:       "docker-server:25565",
+		AllowPlayers: []string{"Steve", "Alex"},
+		DenyPlayers:  []string{"Hacker"},
+		Background:   true,
+		Yes:          true,
+	})
+	if err != nil {
+		t.Fatalf("Minecraft serve failed: %v", err)
+	}
+
+	routes, err := client.ListRoutes(ctx)
+	if err != nil {
+		t.Fatalf("ListRoutes failed: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 Minecraft route, got %d", len(routes))
+	}
+
+	r := routes[0]
+	if r.Rule.Type != "and" {
+		t.Fatalf("expected composite rule 'and', got %s", r.Rule.Type)
+	}
+
+	hasAllow := false
+	hasDeny := false
+	for _, rule := range r.Rule.Rules {
+		if rule.Type == "minecraft_player" && len(rule.Values) == 2 && rule.Values[0] == "Steve" && rule.Values[1] == "Alex" {
+			hasAllow = true
+		}
+		if rule.Type == "minecraft_player_not" && len(rule.Values) == 1 && rule.Values[0] == "Hacker" {
+			hasDeny = true
+		}
+	}
+
+	if !hasAllow {
+		t.Errorf("expected minecraft_player whitelist rule in %+v", r.Rule.Rules)
+	}
+	if !hasDeny {
+		t.Errorf("expected minecraft_player_not blacklist rule in %+v", r.Rule.Rules)
+	}
+}
+
 func TestServeRedirectCommand(t *testing.T) {
 	server, client := setupServeMockServer(t)
 	defer server.Close()

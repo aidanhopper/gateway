@@ -34,6 +34,16 @@ func TestFormatRuleSummary(t *testing.T) {
 	if got := FormatRuleSummary(ruleHost); got != `Host("app.local")` {
 		t.Errorf("expected Host(\"app.local\"), got %s", got)
 	}
+
+	ruleMCPlayer := api.RuleSpec{Type: "minecraft_player", Values: []string{"Steve", "Alex"}}
+	if got := FormatRuleSummary(ruleMCPlayer); got != "MinecraftPlayer(Steve,Alex)" {
+		t.Errorf("expected MinecraftPlayer(Steve,Alex), got %s", got)
+	}
+
+	ruleMCPlayerNot := api.RuleSpec{Type: "minecraft_player_not", Values: []string{"Hacker"}}
+	if got := FormatRuleSummary(ruleMCPlayerNot); got != "MinecraftNotPlayer(Hacker)" {
+		t.Errorf("expected MinecraftNotPlayer(Hacker), got %s", got)
+	}
 }
 
 func TestFormatTargetsSummary(t *testing.T) {

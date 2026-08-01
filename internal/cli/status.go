@@ -56,6 +56,8 @@ func FormatRuleSummary(rule api.RuleSpec) string {
 		return fmt.Sprintf("MinecraftHost(%q)", rule.Value)
 	case "minecraft_player":
 		return fmt.Sprintf("MinecraftPlayer(%s)", strings.Join(rule.Values, ","))
+	case "minecraft_player_not":
+		return fmt.Sprintf("MinecraftNotPlayer(%s)", strings.Join(rule.Values, ","))
 	default:
 		if rule.Value != "" {
 			return fmt.Sprintf("%s(%q)", rule.Type, rule.Value)

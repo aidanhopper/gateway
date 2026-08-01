@@ -416,6 +416,12 @@ func Minecraft(ctx context.Context, client GatewayClient, opts MinecraftOptions)
 	if hostVal != "" {
 		rules = append(rules, api.RuleSpec{Type: "minecraft_host", Value: hostVal})
 	}
+	if len(opts.AllowPlayers) > 0 {
+		rules = append(rules, api.RuleSpec{Type: "minecraft_player", Values: opts.AllowPlayers})
+	}
+	if len(opts.DenyPlayers) > 0 {
+		rules = append(rules, api.RuleSpec{Type: "minecraft_player_not", Values: opts.DenyPlayers})
+	}
 
 	ruleSpec := api.RuleSpec{Type: "any"}
 	if len(rules) == 1 {
@@ -448,6 +454,12 @@ func Minecraft(ctx context.Context, client GatewayClient, opts MinecraftOptions)
 	}
 	fmt.Printf("[SUCCESS] Sharing Minecraft %s -> %s\n", displayHost, target)
 	fmt.Printf("  ├── Listener: %s\n", listenAddr)
+	if len(opts.AllowPlayers) > 0 {
+		fmt.Printf("  ├── Whitelist: %s\n", strings.Join(opts.AllowPlayers, ", "))
+	}
+	if len(opts.DenyPlayers) > 0 {
+		fmt.Printf("  ├── Blacklist: %s\n", strings.Join(opts.DenyPlayers, ", "))
+	}
 	if opts.TTL > 0 {
 		fmt.Printf("  ├── Mount:    %s\n", routeName)
 		fmt.Printf("  └── TTL:      %v (auto-expires)\n", opts.TTL)

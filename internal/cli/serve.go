@@ -507,6 +507,22 @@ func runServeUDP(ctx context.Context, client *Client, args []string, yesMode boo
 	}
 }
 
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return strings.Join(*s, ",")
+}
+
+func (s *stringSliceFlag) Set(val string) error {
+	for _, p := range strings.Split(val, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			*s = append(*s, p)
+		}
+	}
+	return nil
+}
+
 func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMode bool) {
 	args, watchMode := ExtractWatchAndBGFlags(args)
 
@@ -516,6 +532,16 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMo
 	fs.IntVar(priority, "p", 0, "Route priority (shorthand)")
 	_ = fs.Bool("bg", false, "Run in background mode")
 	_ = fs.Bool("d", false, "Run in background mode")
+
+	var allowPlayers stringSliceFlag
+	fs.Var(&allowPlayers, "allow", "Allowed player username(s) (whitelist)")
+	fs.Var(&allowPlayers, "allow-players", "Allowed player username(s) (whitelist)")
+	fs.Var(&allowPlayers, "whitelist", "Allowed player username(s) (whitelist)")
+
+	var denyPlayers stringSliceFlag
+	fs.Var(&denyPlayers, "deny", "Denied player username(s) (blacklist)")
+	fs.Var(&denyPlayers, "deny-players", "Denied player username(s) (blacklist)")
+	fs.Var(&denyPlayers, "blacklist", "Denied player username(s) (blacklist)")
 
 	if hasHelpFlag(args) {
 		fmt.Println("Usage: gateway serve minecraft <host-or-port> [target] [flags]")
@@ -540,12 +566,14 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMo
 	}
 
 	routes, err := serve.Minecraft(ctx, client, serve.MinecraftOptions{
-		HostOrPort: fs.Arg(0),
-		Target:     arg1,
-		Priority:   *priority,
-		TTL:        ttlDuration,
-		Background: !watchMode,
-		Yes:        yesMode,
+		HostOrPort:   fs.Arg(0),
+		Target:       arg1,
+		AllowPlayers: allowPlayers,
+		DenyPlayers:  denyPlayers,
+		Priority:     *priority,
+		TTL:          ttlDuration,
+		Background:   !watchMode,
+		Yes:          yesMode,
 	})
 	if err != nil {
 		log.Fatalf("failed to serve minecraft: %v", err)

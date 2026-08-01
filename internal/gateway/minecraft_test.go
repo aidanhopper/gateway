@@ -220,3 +220,61 @@ func TestGetMinecraftInfo(t *testing.T) {
 		}
 	})
 }
+
+func TestMinecraftPlayerRules(t *testing.T) {
+	allowRule := MinecraftPlayer("Steve", "Alex")
+	denyRule := MinecraftNotPlayer("Hacker")
+
+	// Status ping packet (not login start) -> should pass both rules
+	statusMeta := TCPMetadata{
+		Minecraft: &MinecraftInfo{
+			IsLoginStart: false,
+			Username:     "",
+		},
+	}
+	if !allowRule.Match(statusMeta) {
+		t.Errorf("allowRule should match status ping")
+	}
+	if !denyRule.Match(statusMeta) {
+		t.Errorf("denyRule should match status ping")
+	}
+
+	// Login start for whitelisted player "Steve" -> should match allowRule and match denyRule
+	steveMeta := TCPMetadata{
+		Minecraft: &MinecraftInfo{
+			IsLoginStart: true,
+			Username:     "Steve",
+		},
+	}
+	if !allowRule.Match(steveMeta) {
+		t.Errorf("allowRule should match Steve")
+	}
+	if !denyRule.Match(steveMeta) {
+		t.Errorf("denyRule should match Steve")
+	}
+
+	// Login start for un-whitelisted player "Unknown" -> should fail allowRule, pass denyRule
+	unknownMeta := TCPMetadata{
+		Minecraft: &MinecraftInfo{
+			IsLoginStart: true,
+			Username:     "Unknown",
+		},
+	}
+	if allowRule.Match(unknownMeta) {
+		t.Errorf("allowRule should not match Unknown")
+	}
+	if !denyRule.Match(unknownMeta) {
+		t.Errorf("denyRule should match Unknown")
+	}
+
+	// Login start for blacklisted player "Hacker" -> should fail denyRule
+	hackerMeta := TCPMetadata{
+		Minecraft: &MinecraftInfo{
+			IsLoginStart: true,
+			Username:     "Hacker",
+		},
+	}
+	if denyRule.Match(hackerMeta) {
+		t.Errorf("denyRule should not match Hacker")
+	}
+}
