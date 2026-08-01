@@ -16,7 +16,6 @@ type HTTPOptions struct {
 type HTTPSOptions struct {
 	Mount       string        `json:"mount"`
 	Target      string        `json:"target"`
-	ListenAddr  string        `json:"listen_addr,omitempty"`
 	Priority    int           `json:"priority,omitempty"`
 	ACME        bool          `json:"acme,omitempty"`
 	NoRedirect  bool          `json:"no_redirect,omitempty"`
@@ -48,7 +47,8 @@ type UDPOptions struct {
 
 // MinecraftOptions configures a Minecraft server serve mount.
 type MinecraftOptions struct {
-	HostOrPort   string        `json:"host_or_port"`
+	Domain       string        `json:"domain,omitempty"`
+	HostOrPort   string        `json:"host_or_port,omitempty"`
 	Target       string        `json:"target,omitempty"`
 	AllowPlayers []string      `json:"allow_players,omitempty"`
 	DenyPlayers  []string      `json:"deny_players,omitempty"`

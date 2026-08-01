@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -20,13 +21,11 @@ type ServeRequestHTTP struct {
 type ServeRequestHTTPS struct {
 	Mount      string `json:"mount"`
 	Target     string `json:"target"`
-	ListenAddr string `json:"listen_addr,omitempty"`
 	Priority   int    `json:"priority,omitempty"`
 	ACME       bool   `json:"acme,omitempty"`
 	NoRedirect bool   `json:"no_redirect,omitempty"`
 	TTL        int    `json:"ttl,omitempty"`
 }
-
 
 // ServeRequestRedirect holds payload for POST /api/v1/serve/redirect
 type ServeRequestRedirect struct {
@@ -51,7 +50,8 @@ type ServeRequestPort struct {
 
 // ServeRequestMinecraft holds payload for POST /api/v1/serve/minecraft
 type ServeRequestMinecraft struct {
-	HostOrPort string `json:"host_or_port"`
+	Domain     string `json:"domain,omitempty"`
+	HostOrPort string `json:"host_or_port,omitempty"`
 	Target     string `json:"target,omitempty"`
 	Priority   int    `json:"priority,omitempty"`
 	TTL        int    `json:"ttl,omitempty"`
@@ -68,36 +68,187 @@ type ServeMountItem struct {
 	ExpiresIn string `json:"expires_in"`
 }
 
+func isServeRoute(name string) bool {
+	return strings.HasPrefix(name, "http://") ||
+		strings.HasPrefix(name, "https://") ||
+		strings.HasPrefix(name, "mc://") ||
+		strings.HasPrefix(name, "tcp://") ||
+		strings.HasPrefix(name, "udp://") ||
+		strings.HasPrefix(name, "serve-")
+}
+
+func generateMountName(proto string, mount string, target string) string {
+	mount = strings.TrimSpace(mount)
+	switch proto {
+	case "http":
+		domain, path := parseMountArg(mount)
+		if domain == "" {
+			domain = "localhost"
+		}
+		if path == "/" {
+			return fmt.Sprintf("http://%s/", domain)
+		}
+		return fmt.Sprintf("http://%s%s", domain, path)
+	case "https":
+		domain, path := parseMountArg(mount)
+		if domain == "" {
+			domain = "localhost"
+		}
+		if path == "/" {
+			return fmt.Sprintf("https://%s/", domain)
+		}
+		return fmt.Sprintf("https://%s%s", domain, path)
+	case "redirect":
+		domain, path := parseMountArg(mount)
+		if domain == "" {
+			domain = "localhost"
+		}
+		scheme := "https"
+		if strings.HasPrefix(target, "http://") {
+			scheme = "http"
+		}
+		if path == "/" {
+			return fmt.Sprintf("%s://%s/", scheme, domain)
+		}
+		return fmt.Sprintf("%s://%s%s", scheme, domain, path)
+	case "minecraft", "mc":
+		domain, _ := parseMountArg(mount)
+		if domain == "" && !strings.Contains(mount, "/") {
+			domain = mount
+		}
+		if domain == "" || isNumericPort(domain) {
+			return "mc://default"
+		}
+		return fmt.Sprintf("mc://%s", domain)
+	case "tcp":
+		port := strings.TrimPrefix(mount, ":")
+		return fmt.Sprintf("tcp://%s", port)
+	case "udp":
+		port := strings.TrimPrefix(mount, ":")
+		return fmt.Sprintf("udp://%s", port)
+	default:
+		return mount
+	}
+}
+
+func isNumericPort(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *API) handleListServeMounts(w http.ResponseWriter, r *http.Request) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	var items []ServeMountItem
 	now := time.Now()
+	listenerAddrMap := make(map[string]string)
+	for name, l := range a.listeners {
+		listenerAddrMap[name] = l.Address
+	}
+
+	mountsMap := make(map[string]RouteSpec)
+	mountListeners := make(map[string][]string)
+	var primaryMountNames []string
 
 	for _, entry := range a.routes {
 		spec := entry.spec
-		if strings.HasPrefix(spec.Name, "serve-") {
-			expiresIn := "never"
-			if spec.TTL > 0 {
-				rem := time.Duration(spec.TTL)*time.Second - now.Sub(a.startTime)
-				if rem > 0 {
-					expiresIn = rem.Round(time.Second).String()
-				} else {
-					expiresIn = "expired"
-				}
-			}
-
-			items = append(items, ServeMountItem{
-				Name:      spec.Name,
-				Listener:  spec.Listener,
-				Protocol:  spec.Protocol,
-				Match:     FormatRuleSummary(spec.Rule),
-				Target:    FormatTargetsSummary(spec.Handler),
-				TTL:       spec.TTL,
-				ExpiresIn: expiresIn,
-			})
+		if !isServeRoute(spec.Name) {
+			continue
 		}
+
+		baseName := spec.Name
+		isHelper := false
+		if strings.HasSuffix(spec.Name, "-redir") {
+			baseName = strings.TrimSuffix(spec.Name, "-redir")
+			isHelper = true
+		} else if strings.HasSuffix(spec.Name, "-http") {
+			baseName = strings.TrimSuffix(spec.Name, "-http")
+			isHelper = true
+		}
+
+		addr := listenerAddrMap[spec.Listener]
+		if addr == "" {
+			if strings.HasSuffix(spec.Listener, "-443") {
+				addr = ":443"
+			} else if strings.HasSuffix(spec.Listener, "-80") {
+				addr = ":80"
+			} else if strings.HasPrefix(spec.Listener, "serve-") {
+				parts := strings.Split(spec.Listener, "-")
+				addr = ":" + parts[len(parts)-1]
+			} else {
+				addr = spec.Listener
+			}
+		}
+
+		if !isHelper {
+			if _, exists := mountsMap[baseName]; !exists {
+				primaryMountNames = append(primaryMountNames, baseName)
+			}
+			mountsMap[baseName] = spec
+		}
+
+		addrs := mountListeners[baseName]
+		found := false
+		for _, a := range addrs {
+			if a == addr {
+				found = true
+				break
+			}
+		}
+		if !found {
+			mountListeners[baseName] = append(addrs, addr)
+		}
+	}
+
+	var items []ServeMountItem
+	for _, name := range primaryMountNames {
+		spec := mountsMap[name]
+		addrs := mountListeners[name]
+		listenerStr := spec.Listener
+		if len(addrs) > 0 {
+			listenerStr = strings.Join(addrs, ", ")
+		}
+
+		expiresIn := "never"
+		if spec.TTL > 0 {
+			rem := time.Duration(spec.TTL)*time.Second - now.Sub(a.startTime)
+			if rem > 0 {
+				expiresIn = rem.Round(time.Second).String()
+			} else {
+				expiresIn = "expired"
+			}
+		}
+
+		targetStr := FormatTargetsSummary(spec.Handler)
+		if spec.Handler.Type == "http_redirect" {
+			targetURL, _ := spec.Handler.Config["url"].(string)
+			statusVal := 301
+			if st, ok := spec.Handler.Config["status"].(float64); ok {
+				statusVal = int(st)
+			} else if st, ok := spec.Handler.Config["status"].(int); ok {
+				statusVal = st
+			}
+			if targetURL != "" {
+				targetStr = fmt.Sprintf("%d -> %s", statusVal, targetURL)
+			}
+		}
+
+		items = append(items, ServeMountItem{
+			Name:      spec.Name,
+			Listener:  listenerStr,
+			Protocol:  spec.Protocol,
+			Match:     FormatRuleSummary(spec.Rule),
+			Target:    targetStr,
+			TTL:       spec.TTL,
+			ExpiresIn: expiresIn,
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
@@ -105,12 +256,15 @@ func (a *API) handleListServeMounts(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleGetServeMount(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if unescaped, err := url.PathUnescape(name); err == nil && unescaped != "" {
+		name = unescaped
+	}
 
 	a.mu.RLock()
 	entry, exists := a.routes[name]
 	a.mu.RUnlock()
 
-	if !exists || !strings.HasPrefix(name, "serve-") {
+	if !exists || !isServeRoute(name) {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("serve mount %q not found", name))
 		return
 	}
@@ -127,12 +281,26 @@ func (a *API) handleGetServeMount(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	targetStr := FormatTargetsSummary(spec.Handler)
+	if spec.Handler.Type == "http_redirect" {
+		targetURL, _ := spec.Handler.Config["url"].(string)
+		statusVal := 301
+		if st, ok := spec.Handler.Config["status"].(float64); ok {
+			statusVal = int(st)
+		} else if st, ok := spec.Handler.Config["status"].(int); ok {
+			statusVal = st
+		}
+		if targetURL != "" {
+			targetStr = fmt.Sprintf("%d -> %s", statusVal, targetURL)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, ServeMountItem{
 		Name:      spec.Name,
 		Listener:  spec.Listener,
 		Protocol:  spec.Protocol,
 		Match:     FormatRuleSummary(spec.Rule),
-		Target:    FormatTargetsSummary(spec.Handler),
+		Target:    targetStr,
 		TTL:       spec.TTL,
 		ExpiresIn: expiresIn,
 	})
@@ -170,7 +338,7 @@ func (a *API) handleServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routeName := fmt.Sprintf("serve-http-%d", time.Now().UnixNano())
+	routeName := generateMountName("http", req.Mount, target)
 
 	handlerSpec := HandlerSpec{
 		Type:   "http_lb",
@@ -210,6 +378,7 @@ func (a *API) handleServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Handler:  handlerSpec,
 	}
 
+	_ = a.DeleteRoute(routeName)
 	if err := a.AddRoute(routeSpec); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -236,11 +405,8 @@ func (a *API) handleServeHTTPS(w http.ResponseWriter, r *http.Request) {
 		target = "127.0.0.1:" + target
 	}
 
-	lAddr := req.ListenAddr
-	if lAddr == "" {
-		lAddr = ":443"
-	}
-	lName := fmt.Sprintf("serve-https-%s", strings.TrimPrefix(lAddr, ":"))
+	lAddr := ":443"
+	lName := "serve-https-443"
 
 	var tlsSpec *TLSConfigSpec
 	useACME := req.ACME
@@ -263,7 +429,7 @@ func (a *API) handleServeHTTPS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routeName := fmt.Sprintf("serve-https-%d", time.Now().UnixNano())
+	routeName := generateMountName("https", req.Mount, target)
 	var rules []RuleSpec
 	rules = append(rules, RuleSpec{Type: "secure"})
 	if domainVal != "" {
@@ -302,6 +468,7 @@ func (a *API) handleServeHTTPS(w http.ResponseWriter, r *http.Request) {
 		Handler:  handlerSpec,
 	}
 
+	_ = a.DeleteRoute(routeName)
 	if err := a.AddRoute(routeSpec); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -309,7 +476,8 @@ func (a *API) handleServeHTTPS(w http.ResponseWriter, r *http.Request) {
 
 	if !req.NoRedirect {
 		_ = a.ensureListenerInternal(ListenerSpec{Name: "serve-http-80", Address: ":80", Protocol: "tcp"})
-		redirectRouteName := fmt.Sprintf("serve-redirect-%s", routeName)
+		redirectRouteName := routeName + "-redir"
+		_ = a.DeleteRoute(redirectRouteName)
 		var rRules []RuleSpec
 		rRules = append(rRules, RuleSpec{Type: "not", Rule: &RuleSpec{Type: "secure"}})
 		if domainVal != "" {
@@ -382,7 +550,8 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 		"keep_query":   !req.NoQuery,
 	}
 
-	httpsRouteName := fmt.Sprintf("serve-redirect-https-%d", time.Now().UnixNano())
+	routeName := generateMountName("redirect", req.Mount, targetURL)
+
 	var rules []RuleSpec
 	rules = append(rules, RuleSpec{Type: "secure"})
 	if domain != "" {
@@ -397,7 +566,7 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpsRoute := RouteSpec{
-		Name:     httpsRouteName,
+		Name:     routeName,
 		Protocol: "http",
 		Listener: "serve-https-443",
 		Priority: calculateServeAutoPriority(ruleSpec, req.Priority),
@@ -408,9 +577,11 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 			Config: handlerConfig,
 		},
 	}
+	_ = a.DeleteRoute(routeName)
 	_ = a.AddRoute(httpsRoute)
 
-	httpRouteName := fmt.Sprintf("serve-redirect-http-%d", time.Now().UnixNano())
+	redirectRouteName := routeName + "-redir"
+	_ = a.DeleteRoute(redirectRouteName)
 	var rRules []RuleSpec
 	rRules = append(rRules, RuleSpec{Type: "not", Rule: &RuleSpec{Type: "secure"}})
 	if domain != "" {
@@ -425,7 +596,7 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpRoute := RouteSpec{
-		Name:     httpRouteName,
+		Name:     redirectRouteName,
 		Protocol: "http",
 		Listener: "serve-http-80",
 		Priority: calculateServeAutoPriority(rRuleSpec, req.Priority),
@@ -439,8 +610,8 @@ func (a *API) handleServeRedirect(w http.ResponseWriter, r *http.Request) {
 	_ = a.AddRoute(httpRoute)
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"https_route": httpsRouteName,
-		"http_route":  httpRouteName,
+		"https_route": routeName,
+		"http_route":  redirectRouteName,
 		"target_url":   targetURL,
 		"status_code":  status,
 	})
@@ -473,7 +644,7 @@ func (a *API) handleServeTCP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routeName := fmt.Sprintf("serve-tcp-route-%d", time.Now().UnixNano())
+	routeName := generateMountName("tcp", req.ListenPort, target)
 	routeSpec := RouteSpec{
 		Name:     routeName,
 		Protocol: "tcp",
@@ -487,6 +658,7 @@ func (a *API) handleServeTCP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	_ = a.DeleteRoute(routeName)
 	if err := a.AddRoute(routeSpec); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -522,7 +694,7 @@ func (a *API) handleServeUDP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routeName := fmt.Sprintf("serve-udp-route-%d", time.Now().UnixNano())
+	routeName := generateMountName("udp", req.ListenPort, target)
 	routeSpec := RouteSpec{
 		Name:     routeName,
 		Protocol: "udp",
@@ -536,6 +708,7 @@ func (a *API) handleServeUDP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	_ = a.DeleteRoute(routeName)
 	if err := a.AddRoute(routeSpec); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -551,12 +724,16 @@ func (a *API) handleServeMinecraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.HostOrPort == "" {
-		writeError(w, http.StatusBadRequest, "field 'host_or_port' is required")
+	hostArg := req.Domain
+	if hostArg == "" {
+		hostArg = req.HostOrPort
+	}
+	if hostArg == "" {
+		writeError(w, http.StatusBadRequest, "field 'domain' or 'host_or_port' is required")
 		return
 	}
 
-	parsedDomain, _ := parseMountArg(req.HostOrPort)
+	parsedDomain, _ := parseMountArg(hostArg)
 	listenAddr := ":25565"
 	target := "127.0.0.1:25565"
 	if req.Target != "" {
@@ -564,16 +741,10 @@ func (a *API) handleServeMinecraft(w http.ResponseWriter, r *http.Request) {
 	}
 	hostVal := ""
 
-	if parsedDomain != "" || strings.Contains(req.HostOrPort, ".") {
+	if parsedDomain != "" || strings.Contains(hostArg, ".") {
 		hostVal = parsedDomain
 		if hostVal == "" {
-			hostVal = req.HostOrPort
-		}
-	} else {
-		listenPort := req.HostOrPort
-		listenAddr = ":" + listenPort
-		if strings.Contains(listenPort, ":") {
-			listenAddr = listenPort
+			hostVal = hostArg
 		}
 	}
 
@@ -581,7 +752,7 @@ func (a *API) handleServeMinecraft(w http.ResponseWriter, r *http.Request) {
 		target = "127.0.0.1:" + target
 	}
 
-	listenerName := fmt.Sprintf("serve-mc-%s", strings.TrimPrefix(listenAddr, ":"))
+	listenerName := "serve-mc-25565"
 	if err := a.ensureListenerInternal(ListenerSpec{Name: listenerName, Address: listenAddr, Protocol: "tcp"}); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -599,7 +770,7 @@ func (a *API) handleServeMinecraft(w http.ResponseWriter, r *http.Request) {
 		ruleSpec = RuleSpec{Type: "and", Rules: rules}
 	}
 
-	routeName := fmt.Sprintf("serve-mc-route-%d", time.Now().UnixNano())
+	routeName := generateMountName("minecraft", hostArg, target)
 	routeSpec := RouteSpec{
 		Name:     routeName,
 		Protocol: "tcp",
@@ -613,6 +784,7 @@ func (a *API) handleServeMinecraft(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	_ = a.DeleteRoute(routeName)
 	if err := a.AddRoute(routeSpec); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -627,12 +799,20 @@ func (a *API) handleServeDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "name parameter is required")
 		return
 	}
+	if unescaped, err := url.PathUnescape(nameOrPort); err == nil && unescaped != "" {
+		nameOrPort = unescaped
+	}
 
 	deletedCount := 0
 	a.mu.RLock()
 	var routesToDelete []string
 	for name, entry := range a.routes {
-		if name == nameOrPort || strings.Contains(name, nameOrPort) || strings.HasSuffix(entry.spec.Listener, "-"+nameOrPort) {
+		if name == nameOrPort ||
+			name == nameOrPort+"-redir" ||
+			name == nameOrPort+"-http" ||
+			strings.HasPrefix(name, nameOrPort+"-") ||
+			strings.Contains(name, nameOrPort) ||
+			strings.HasSuffix(entry.spec.Listener, "-"+nameOrPort) {
 			routesToDelete = append(routesToDelete, name)
 		}
 	}
@@ -664,7 +844,7 @@ func (a *API) handleServeReset(w http.ResponseWriter, r *http.Request) {
 	a.mu.RLock()
 	var serveRoutes []string
 	for name := range a.routes {
-		if strings.HasPrefix(name, "serve-") {
+		if isServeRoute(name) {
 			serveRoutes = append(serveRoutes, name)
 		}
 	}

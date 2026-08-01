@@ -25,7 +25,7 @@ func PrintServeUsage() {
 	fmt.Println("  https <path> <target>                      Expose local service over HTTPS (e.g. gateway serve https / 3000 --acme)")
 	fmt.Println("  tcp <port> <target>                        Expose TCP stream (e.g. gateway serve tcp 2222 127.0.0.1:22)")
 	fmt.Println("  udp <port> <target>                        Expose UDP stream (e.g. gateway serve udp 5353 127.0.0.1:53)")
-	fmt.Println("  minecraft (mc) <port> <target>             Expose Minecraft server")
+	fmt.Println("  minecraft (mc) [domain] [target]           Expose Minecraft server")
 	fmt.Println("\nCommon Flags:")
 	fmt.Println("  --bg, -d                                   Run in background mode")
 	fmt.Println("  --ttl <duration>                           Auto-expire duration (e.g. 30s, 15m, 2h, 1d)")
@@ -372,7 +372,6 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode b
 
 	fs := flag.NewFlagSet("serve https", flag.ExitOnError)
 	ttlStr := fs.String("ttl", "", "Time to live duration")
-	listenAddr := fs.String("listen", ":443", "Listen address")
 	acme := fs.Bool("acme", true, "Enable automatic Let's Encrypt / ACME TLS cert")
 	noRedirect := fs.Bool("no-redirect", false, "Do not automatically create HTTP to HTTPS redirect route on port 80")
 	priority := fs.Int("priority", 0, "Route priority (0 for auto)")
@@ -402,7 +401,6 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode b
 	routes, err := serve.HTTPS(ctx, client, serve.HTTPSOptions{
 		Mount:      fs.Arg(0),
 		Target:     target,
-		ListenAddr: *listenAddr,
 		Priority:   *priority,
 		ACME:       *acme,
 		NoRedirect: *noRedirect,
@@ -598,16 +596,16 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMo
 	fs.Var(&denyPlayers, "blacklist", "Denied player username(s) (blacklist)")
 
 	if hasHelpFlag(args) {
-		fmt.Println("Usage: gateway serve minecraft <host-or-port> [target] [flags]")
+		fmt.Println("Usage: gateway serve minecraft [domain] [target] [flags]")
 		fs.PrintDefaults()
 		os.Exit(0)
 	}
 
 	args = ReorderFlagsFirst(fs, args)
 	_ = fs.Parse(args)
-	if fs.NArg() < 1 {
-		fmt.Println("Usage: gateway serve minecraft <host-or-port> [target] [flags]")
-		os.Exit(0)
+	arg0 := ""
+	if fs.NArg() >= 1 {
+		arg0 = fs.Arg(0)
 	}
 
 	arg1 := ""
@@ -621,7 +619,8 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMo
 	}
 
 	routes, err := serve.Minecraft(ctx, client, serve.MinecraftOptions{
-		HostOrPort:   fs.Arg(0),
+		Domain:       arg0,
+		HostOrPort:   arg0,
 		Target:       arg1,
 		AllowPlayers: allowPlayers,
 		DenyPlayers:  denyPlayers,

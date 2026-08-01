@@ -382,10 +382,10 @@ func TestServeHTTPSAutoRedirect(t *testing.T) {
 	hasHTTPS := false
 	hasRedirect := false
 	for _, r := range routes {
-		if strings.HasPrefix(r.Name, "serve-https-") {
+		if strings.HasPrefix(r.Name, "https://") && !strings.HasSuffix(r.Name, "-redir") {
 			hasHTTPS = true
 		}
-		if strings.HasPrefix(r.Name, "serve-redirect-") {
+		if strings.HasSuffix(r.Name, "-redir") {
 			hasRedirect = true
 			if r.Handler.Type != "http_redirect" {
 				t.Errorf("expected redirect handler type http_redirect, got %s", r.Handler.Type)
@@ -754,6 +754,32 @@ func TestHasMatchingRouteReplacement(t *testing.T) {
 	routes, _ := client.ListRoutes(ctx)
 	if len(routes) != 0 {
 		t.Errorf("expected old route to be deleted on target mismatch, remaining routes: %d", len(routes))
+	}
+}
+
+func TestGenerateMountName(t *testing.T) {
+	tests := []struct {
+		proto    string
+		mount    string
+		target   string
+		expected string
+	}{
+		{"http", "/", "3000", "http://localhost/"},
+		{"http", "example.com/api", "8080", "http://example.com/api"},
+		{"https", "secure.com/app", "3000", "https://secure.com/app"},
+		{"redirect", "old.com/blog", "https://new.com", "https://old.com/blog"},
+		{"redirect", "old.com/blog", "http://new.com", "http://old.com/blog"},
+		{"minecraft", "mc.example.com", "25565", "mc://mc.example.com"},
+		{"minecraft", "", "25565", "mc://default"},
+		{"tcp", "2222", "127.0.0.1:22", "tcp://2222"},
+		{"udp", "5353", "127.0.0.1:53", "udp://5353"},
+	}
+
+	for _, tt := range tests {
+		got := GenerateMountName(tt.proto, tt.mount, tt.target)
+		if got != tt.expected {
+			t.Errorf("GenerateMountName(%q, %q, %q) = %q, want %q", tt.proto, tt.mount, tt.target, got, tt.expected)
+		}
 	}
 }
 

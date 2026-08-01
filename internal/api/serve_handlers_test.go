@@ -3,9 +3,9 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -172,7 +172,7 @@ func TestAPIServeHTTPSAndRedirectOption(t *testing.T) {
 	}
 
 	// Verify HTTP redirect route created in DB
-	redirectRouteName := fmt.Sprintf("serve-redirect-%s", httpsRoute.Name)
+	redirectRouteName := httpsRoute.Name + "-redir"
 	var routeCount int
 	if err := apiInstance.db.QueryRow("SELECT COUNT(*) FROM routes WHERE name = ?", redirectRouteName).Scan(&routeCount); err != nil || routeCount != 1 {
 		t.Errorf("expected redirect route %s in DB, got count=%d err=%v", redirectRouteName, routeCount, err)
@@ -190,7 +190,7 @@ func TestAPIServeHTTPSAndRedirectOption(t *testing.T) {
 
 	var noRedirRoute RouteSpec
 	_ = json.Unmarshal(rec.Body.Bytes(), &noRedirRoute)
-	noRedirRedirectName := fmt.Sprintf("serve-redirect-%s", noRedirRoute.Name)
+	noRedirRedirectName := noRedirRoute.Name + "-redir"
 
 	if err := apiInstance.db.QueryRow("SELECT COUNT(*) FROM routes WHERE name = ?", noRedirRedirectName).Scan(&routeCount); err != nil || routeCount != 0 {
 		t.Errorf("expected NO redirect route for no_redirect=true, got count=%d", routeCount)
@@ -325,7 +325,7 @@ func TestAPIServeListAndGetMounts(t *testing.T) {
 	}
 
 	// GET /api/v1/serve/{name}
-	req = httptest.NewRequest("GET", "/api/v1/serve/"+routeResp.Name, nil)
+	req = httptest.NewRequest("GET", "/api/v1/serve/"+url.PathEscape(routeResp.Name), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -347,8 +347,8 @@ func TestAPIServeDeleteAndResetListenersCleanup(t *testing.T) {
 	apiInstance, _, token := setupTestAPI(t)
 	handler := NewHandler(apiInstance)
 
-	// Create 2 TCP routes on port 8080 (listener: serve-tcp-8080)
-	req := httptest.NewRequest("POST", "/api/v1/serve/tcp", bytes.NewBufferString(`{"listen_port":"8080","target":"127.0.0.1:8081"}`))
+	// Create 2 HTTP routes on listener serve-http-80
+	req := httptest.NewRequest("POST", "/api/v1/serve/http", bytes.NewBufferString(`{"mount":"app1.localhost/a","target":"127.0.0.1:8081"}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -357,7 +357,7 @@ func TestAPIServeDeleteAndResetListenersCleanup(t *testing.T) {
 
 	time.Sleep(2 * time.Millisecond)
 
-	req = httptest.NewRequest("POST", "/api/v1/serve/tcp", bytes.NewBufferString(`{"listen_port":"8080","target":"127.0.0.1:8082"}`))
+	req = httptest.NewRequest("POST", "/api/v1/serve/http", bytes.NewBufferString(`{"mount":"app2.localhost/b","target":"127.0.0.1:8082"}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -376,8 +376,8 @@ func TestAPIServeDeleteAndResetListenersCleanup(t *testing.T) {
 	var r3 RouteSpec
 	_ = json.Unmarshal(rec.Body.Bytes(), &r3)
 
-	// Delete route r1 (listener serve-tcp-8080 still has route r2!)
-	req = httptest.NewRequest("DELETE", "/api/v1/serve/"+r1.Name, nil)
+	// Delete route r1 (listener serve-http-80 still has active route r2)
+	req = httptest.NewRequest("DELETE", "/api/v1/serve/"+url.PathEscape(r1.Name), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -385,14 +385,14 @@ func TestAPIServeDeleteAndResetListenersCleanup(t *testing.T) {
 		t.Fatalf("DELETE /api/v1/serve/%s failed: %d", r1.Name, rec.Code)
 	}
 
-	// Listener serve-tcp-8080 must STILL exist in DB because r2 is active
+	// Listener serve-http-80 must STILL exist in DB because r2 is active
 	var lCount int
-	if err := apiInstance.db.QueryRow("SELECT COUNT(*) FROM listeners WHERE name = 'serve-tcp-8080'").Scan(&lCount); err != nil || lCount != 1 {
-		t.Errorf("expected listener serve-tcp-8080 to be preserved while r2 is active, got count=%d", lCount)
+	if err := apiInstance.db.QueryRow("SELECT COUNT(*) FROM listeners WHERE name = 'serve-http-80'").Scan(&lCount); err != nil || lCount != 1 {
+		t.Errorf("expected listener serve-http-80 to be preserved while r2 is active, got count=%d", lCount)
 	}
 
-	// Delete route r2 (now listener serve-tcp-8080 has ZERO active routes!)
-	req = httptest.NewRequest("DELETE", "/api/v1/serve/"+r2.Name, nil)
+	// Delete route r2 (now listener serve-http-80 has ZERO active routes!)
+	req = httptest.NewRequest("DELETE", "/api/v1/serve/"+url.PathEscape(r2.Name), nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -400,9 +400,9 @@ func TestAPIServeDeleteAndResetListenersCleanup(t *testing.T) {
 		t.Fatalf("DELETE /api/v1/serve/%s failed: %d", r2.Name, rec.Code)
 	}
 
-	// Listener serve-tcp-8080 must NOW be cleaned up and removed from DB
-	if err := apiInstance.db.QueryRow("SELECT COUNT(*) FROM listeners WHERE name = 'serve-tcp-8080'").Scan(&lCount); err != nil || lCount != 0 {
-		t.Errorf("expected listener serve-tcp-8080 to be cleaned up after r2 deletion, got count=%d", lCount)
+	// Listener serve-http-80 must NOW be cleaned up and removed from DB
+	if err := apiInstance.db.QueryRow("SELECT COUNT(*) FROM listeners WHERE name = 'serve-http-80'").Scan(&lCount); err != nil || lCount != 0 {
+		t.Errorf("expected listener serve-http-80 to be cleaned up after r2 deletion, got count=%d", lCount)
 	}
 
 	// Listener serve-tcp-8090 must STILL exist in DB

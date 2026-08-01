@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/aidanhopper/gateway/internal/api"
 )
@@ -30,7 +29,7 @@ func HTTP(ctx context.Context, client GatewayClient, opts HTTPOptions) ([]string
 		return nil, fmt.Errorf("failed to create listener: %w", err)
 	}
 
-	routeName := fmt.Sprintf("serve-http-%d", time.Now().UnixNano())
+	routeName := GenerateMountName("http", opts.Mount, target)
 
 	handlerSpec := api.HandlerSpec{
 		Type:   "http_lb",
@@ -119,12 +118,8 @@ func HTTPS(ctx context.Context, client GatewayClient, opts HTTPSOptions) ([]stri
 	}
 
 	domainVal := parsedDomain
-
-	lAddr := opts.ListenAddr
-	if lAddr == "" {
-		lAddr = ":443"
-	}
-	lName := fmt.Sprintf("serve-https-%s", strings.TrimPrefix(lAddr, ":"))
+	lAddr := ":443"
+	lName := "serve-https-443"
 
 	useACME := opts.ACME
 	if domainVal != "" && !useACME {
@@ -149,7 +144,7 @@ func HTTPS(ctx context.Context, client GatewayClient, opts HTTPSOptions) ([]stri
 		return nil, fmt.Errorf("failed to create HTTPS listener: %w", err)
 	}
 
-	routeName := fmt.Sprintf("serve-https-route-%d", time.Now().UnixNano())
+	routeName := GenerateMountName("https", opts.Mount, target)
 
 	var rules []api.RuleSpec
 	rules = append(rules, api.RuleSpec{Type: "secure"})
@@ -221,7 +216,7 @@ func HTTPS(ctx context.Context, client GatewayClient, opts HTTPSOptions) ([]stri
 	if !opts.NoRedirect {
 		httpListener, err := EnsureListener(ctx, client, "serve-http-80", ":80", "tcp", nil)
 		if err == nil {
-			redirectRouteName := fmt.Sprintf("serve-redirect-%s", routeName)
+			redirectRouteName := routeName + "-redir"
 			var rRules []api.RuleSpec
 			rRules = append(rRules, api.RuleSpec{Type: "not", Rule: &api.RuleSpec{Type: "secure"}})
 			if domainVal != "" {
@@ -284,7 +279,7 @@ func TCP(ctx context.Context, client GatewayClient, opts TCPOptions) ([]string, 
 		return nil, fmt.Errorf("failed to create listener: %w", err)
 	}
 
-	routeName := fmt.Sprintf("serve-tcp-route-%d", time.Now().UnixNano())
+	routeName := GenerateMountName("tcp", opts.ListenPort, target)
 	routeSpec := api.RouteSpec{
 		Name:     routeName,
 		Protocol: "tcp",
@@ -337,7 +332,7 @@ func UDP(ctx context.Context, client GatewayClient, opts UDPOptions) ([]string, 
 		return nil, fmt.Errorf("failed to create UDP listener: %w", err)
 	}
 
-	routeName := fmt.Sprintf("serve-udp-route-%d", time.Now().UnixNano())
+	routeName := GenerateMountName("udp", opts.ListenPort, target)
 	routeSpec := api.RouteSpec{
 		Name:     routeName,
 		Protocol: "udp",
@@ -368,7 +363,10 @@ func UDP(ctx context.Context, client GatewayClient, opts UDPOptions) ([]string, 
 
 // Minecraft mounts a Minecraft server serve mount programmatically and returns created route names.
 func Minecraft(ctx context.Context, client GatewayClient, opts MinecraftOptions) ([]string, error) {
-	arg0 := opts.HostOrPort
+	arg0 := opts.Domain
+	if arg0 == "" {
+		arg0 = opts.HostOrPort
+	}
 	arg1 := opts.Target
 
 	if !client.ConfirmPublicSiteExposure(opts.Yes, fmt.Sprintf("Minecraft service %s", arg0)) {
@@ -389,11 +387,6 @@ func Minecraft(ctx context.Context, client GatewayClient, opts MinecraftOptions)
 			target = arg1
 		}
 	} else {
-		listenPort := arg0
-		listenAddr = ":" + listenPort
-		if strings.Contains(listenPort, ":") {
-			listenAddr = listenPort
-		}
 		if arg1 != "" {
 			target = arg1
 		}
@@ -403,7 +396,7 @@ func Minecraft(ctx context.Context, client GatewayClient, opts MinecraftOptions)
 		target = "127.0.0.1:" + target
 	}
 
-	listenerName := fmt.Sprintf("serve-mc-%s", strings.TrimPrefix(listenAddr, ":"))
+	listenerName := "serve-mc-25565"
 
 	actualListener, err := EnsureListener(ctx, client, listenerName, listenAddr, "tcp", nil)
 	if err != nil {
@@ -430,7 +423,7 @@ func Minecraft(ctx context.Context, client GatewayClient, opts MinecraftOptions)
 		ruleSpec = api.RuleSpec{Type: "and", Rules: rules}
 	}
 
-	routeName := fmt.Sprintf("serve-mc-route-%d", time.Now().UnixNano())
+	routeName := GenerateMountName("minecraft", arg0, target)
 	routeSpec := api.RouteSpec{
 		Name:     routeName,
 		Protocol: "tcp",
@@ -469,8 +462,6 @@ func Minecraft(ctx context.Context, client GatewayClient, opts MinecraftOptions)
 
 	return []string{routeName}, nil
 }
-
-
 
 // Redirect mounts an HTTP/HTTPS redirect programmatically and returns created route names.
 func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) ([]string, error) {
@@ -516,14 +507,16 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 		"keep_query":   !opts.NoQuery,
 	}
 
+	routeName := GenerateMountName("redirect", opts.Mount, targetURL)
+
 	httpsListener, err := EnsureListener(ctx, client, "serve-https-443", ":443", "tcp", tlsSpec)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] Could not create HTTPS listener on :443: %v\n", err)
 	} else {
 		if HasMatchingRoute(ctx, client, httpsListener, domain, path, targetURL) {
 			fmt.Printf("[INFO] Redirecting HTTPS https://%s -> %s (Code: %d, already active)\n", displaySource, targetURL, status)
+			createdRoutes = append(createdRoutes, routeName)
 		} else {
-			httpsRouteName := fmt.Sprintf("serve-redirect-https-%d", time.Now().UnixNano())
 			var rules []api.RuleSpec
 			rules = append(rules, api.RuleSpec{Type: "secure"})
 			if domain != "" {
@@ -539,7 +532,7 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 			}
 
 			httpsRoute := api.RouteSpec{
-				Name:     httpsRouteName,
+				Name:     routeName,
 				Protocol: "http",
 				Listener: httpsListener,
 				Priority: CalculateAutoPriority(ruleSpec, opts.Priority),
@@ -554,8 +547,8 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 			if err := client.CreateRoute(ctx, httpsRoute); err != nil {
 				fmt.Fprintf(os.Stderr, "[ERROR] Could not create HTTPS redirect route: %v\n", err)
 			} else {
-				createdRoutes = append(createdRoutes, httpsRouteName)
-				fmt.Printf("[INFO] Redirecting HTTPS https://%s -> %s (Code: %d, Mount: %s)\n", displaySource, targetURL, status, httpsRouteName)
+				createdRoutes = append(createdRoutes, routeName)
+				fmt.Printf("[INFO] Redirecting HTTPS https://%s -> %s (Code: %d, Mount: %s)\n", displaySource, targetURL, status, routeName)
 			}
 		}
 	}
@@ -564,26 +557,26 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[ERROR] Could not create HTTP listener on :80: %v\n", err)
 	} else {
+		redirectRouteName := routeName + "-redir"
 		if HasMatchingRoute(ctx, client, httpListener, domain, path, targetURL) {
 			fmt.Printf("[INFO] Redirecting HTTP  http://%s -> %s (Code: %d, already active)\n", displaySource, targetURL, status)
 		} else {
-			httpRouteName := fmt.Sprintf("serve-redirect-http-%d", time.Now().UnixNano())
-			var rules []api.RuleSpec
-			rules = append(rules, api.RuleSpec{Type: "not", Rule: &api.RuleSpec{Type: "secure"}})
+			var rRules []api.RuleSpec
+			rRules = append(rRules, api.RuleSpec{Type: "not", Rule: &api.RuleSpec{Type: "secure"}})
 			if domain != "" {
-				rules = append(rules, api.RuleSpec{Type: "host", Value: domain})
+				rRules = append(rRules, api.RuleSpec{Type: "host", Value: domain})
 			}
 			if path != "/" && path != "" {
-				rules = append(rules, api.RuleSpec{Type: pathRuleType, Value: path})
+				rRules = append(rRules, api.RuleSpec{Type: pathRuleType, Value: path})
 			}
 
-			ruleSpec := rules[0]
-			if len(rules) > 1 {
-				ruleSpec = api.RuleSpec{Type: "and", Rules: rules}
+			ruleSpec := rRules[0]
+			if len(rRules) > 1 {
+				ruleSpec = api.RuleSpec{Type: "and", Rules: rRules}
 			}
 
 			httpRoute := api.RouteSpec{
-				Name:     httpRouteName,
+				Name:     redirectRouteName,
 				Protocol: "http",
 				Listener: httpListener,
 				Priority: CalculateAutoPriority(ruleSpec, opts.Priority),
@@ -598,8 +591,8 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 			if err := client.CreateRoute(ctx, httpRoute); err != nil {
 				fmt.Fprintf(os.Stderr, "[ERROR] Could not create HTTP redirect route: %v\n", err)
 			} else {
-				createdRoutes = append(createdRoutes, httpRouteName)
-				fmt.Printf("[INFO] Redirecting HTTP  http://%s -> %s (Code: %d, Mount: %s)\n", displaySource, targetURL, status, httpRouteName)
+				createdRoutes = append(createdRoutes, redirectRouteName)
+				fmt.Printf("[INFO] Redirecting HTTP  http://%s -> %s (Code: %d, Mount: %s)\n", displaySource, targetURL, status, redirectRouteName)
 			}
 		}
 	}
@@ -618,14 +611,103 @@ func Status(ctx context.Context, client GatewayClient) ([]api.RouteSpec, error) 
 		return nil, fmt.Errorf("failed to retrieve serve status: %w", err)
 	}
 
-	var serveRoutes []api.RouteSpec
+	listeners, _ := client.ListListeners(ctx)
+	listenerAddrMap := make(map[string]string)
+	for _, l := range listeners {
+		listenerAddrMap[l.Name] = l.Address
+	}
+
+	mountsMap := make(map[string]api.RouteSpec)
+	mountListeners := make(map[string][]string)
+	var primaryMountNames []string
+
 	for _, r := range routes {
-		if strings.HasPrefix(r.Name, "serve-") {
-			serveRoutes = append(serveRoutes, r)
+		if !IsServeRoute(r.Name) {
+			continue
+		}
+
+		baseName := r.Name
+		isHelper := false
+		if strings.HasSuffix(r.Name, "-redir") {
+			baseName = strings.TrimSuffix(r.Name, "-redir")
+			isHelper = true
+		} else if strings.HasSuffix(r.Name, "-http") {
+			baseName = strings.TrimSuffix(r.Name, "-http")
+			isHelper = true
+		}
+
+		addr := listenerAddrMap[r.Listener]
+		if addr == "" {
+			if strings.HasSuffix(r.Listener, "-443") {
+				addr = ":443"
+			} else if strings.HasSuffix(r.Listener, "-80") {
+				addr = ":80"
+			} else if strings.HasPrefix(r.Listener, "serve-") {
+				parts := strings.Split(r.Listener, "-")
+				addr = ":" + parts[len(parts)-1]
+			} else {
+				addr = r.Listener
+			}
+		}
+
+		if !isHelper {
+			if _, exists := mountsMap[baseName]; !exists {
+				primaryMountNames = append(primaryMountNames, baseName)
+			}
+			mountsMap[baseName] = r
+		}
+
+		addrs := mountListeners[baseName]
+		found := false
+		for _, a := range addrs {
+			if a == addr {
+				found = true
+				break
+			}
+		}
+		if !found {
+			mountListeners[baseName] = append(addrs, addr)
 		}
 	}
 
-	return serveRoutes, nil
+	var result []api.RouteSpec
+	for _, name := range primaryMountNames {
+		rSpec := mountsMap[name]
+		addrs := mountListeners[name]
+		if len(addrs) > 0 {
+			rSpec.Listener = strings.Join(addrs, ", ")
+		}
+
+		if rSpec.Handler.Type == "http_redirect" {
+			targetURL, _ := rSpec.Handler.Config["url"].(string)
+			statusVal := 301
+			if st, ok := rSpec.Handler.Config["status"].(float64); ok {
+				statusVal = int(st)
+			} else if st, ok := rSpec.Handler.Config["status"].(int); ok {
+				statusVal = st
+			}
+			if targetURL != "" {
+				rSpec.Handler.Config = map[string]any{
+					"target": fmt.Sprintf("%d -> %s", statusVal, targetURL),
+					"url":    targetURL,
+				}
+			}
+		}
+
+		result = append(result, rSpec)
+	}
+
+	return result, nil
+}
+
+// IsServeRoute returns true if route name belongs to a serve mount.
+func IsServeRoute(name string) bool {
+	return strings.HasPrefix(name, "http://") ||
+		strings.HasPrefix(name, "https://") ||
+		strings.HasPrefix(name, "mc://") ||
+		strings.HasPrefix(name, "tcp://") ||
+		strings.HasPrefix(name, "udp://") ||
+		strings.HasPrefix(name, "serve-")
 }
 
 // Off removes an active serve mount by name or port.
@@ -635,9 +717,19 @@ func Off(ctx context.Context, client GatewayClient, nameOrPort string) (int, err
 		return 0, fmt.Errorf("failed to retrieve routes: %w", err)
 	}
 
+	targetName := strings.TrimSpace(nameOrPort)
 	deletedCount := 0
+
 	for _, r := range routes {
-		if r.Name == nameOrPort || strings.Contains(r.Name, nameOrPort) || strings.HasSuffix(r.Listener, "-"+nameOrPort) {
+		if !IsServeRoute(r.Name) {
+			continue
+		}
+		if r.Name == targetName ||
+			r.Name == targetName+"-redir" ||
+			r.Name == targetName+"-http" ||
+			strings.HasPrefix(r.Name, targetName+"-") ||
+			strings.Contains(r.Name, targetName) ||
+			strings.HasSuffix(r.Listener, "-"+targetName) {
 			if err := client.DeleteRoute(ctx, r.Name); err == nil {
 				deletedCount++
 			}
@@ -645,7 +737,7 @@ func Off(ctx context.Context, client GatewayClient, nameOrPort string) (int, err
 	}
 
 	if deletedCount == 0 {
-		if err := client.DeleteRoute(ctx, nameOrPort); err == nil {
+		if err := client.DeleteRoute(ctx, targetName); err == nil {
 			deletedCount++
 		}
 	}
@@ -666,7 +758,7 @@ func Reset(ctx context.Context, client GatewayClient) (int, error) {
 
 	var serveRoutes []string
 	for _, r := range routes {
-		if strings.HasPrefix(r.Name, "serve-") {
+		if IsServeRoute(r.Name) {
 			serveRoutes = append(serveRoutes, r.Name)
 		}
 	}

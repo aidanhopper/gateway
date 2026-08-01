@@ -40,6 +40,61 @@ func ParseMount(arg string) (domain string, path string) {
 	return domain, path
 }
 
+// GenerateMountName constructs a clean user-facing Serve Mount Name based on protocol and mount options.
+func GenerateMountName(proto string, mount string, target string) string {
+	mount = strings.TrimSpace(mount)
+	switch proto {
+	case "http":
+		domain, path := ParseMount(mount)
+		if domain == "" {
+			domain = "localhost"
+		}
+		if path == "/" {
+			return fmt.Sprintf("http://%s/", domain)
+		}
+		return fmt.Sprintf("http://%s%s", domain, path)
+	case "https":
+		domain, path := ParseMount(mount)
+		if domain == "" {
+			domain = "localhost"
+		}
+		if path == "/" {
+			return fmt.Sprintf("https://%s/", domain)
+		}
+		return fmt.Sprintf("https://%s%s", domain, path)
+	case "redirect":
+		domain, path := ParseMount(mount)
+		if domain == "" {
+			domain = "localhost"
+		}
+		scheme := "https"
+		if strings.HasPrefix(target, "http://") {
+			scheme = "http"
+		}
+		if path == "/" {
+			return fmt.Sprintf("%s://%s/", scheme, domain)
+		}
+		return fmt.Sprintf("%s://%s%s", scheme, domain, path)
+	case "minecraft", "mc":
+		domain, _ := ParseMount(mount)
+		if domain == "" && !strings.Contains(mount, "/") {
+			domain = mount
+		}
+		if domain == "" || IsNumericPort(domain) {
+			return "mc://default"
+		}
+		return fmt.Sprintf("mc://%s", domain)
+	case "tcp":
+		port := strings.TrimPrefix(mount, ":")
+		return fmt.Sprintf("tcp://%s", port)
+	case "udp":
+		port := strings.TrimPrefix(mount, ":")
+		return fmt.Sprintf("udp://%s", port)
+	default:
+		return mount
+	}
+}
+
 // ExtractRuleDomainAndPath extracts host domain and path from a RuleSpec.
 func ExtractRuleDomainAndPath(rule api.RuleSpec) (domain string, path string) {
 	path = "/"
