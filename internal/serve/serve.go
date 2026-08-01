@@ -626,15 +626,7 @@ func Status(ctx context.Context, client GatewayClient) ([]api.RouteSpec, error) 
 			continue
 		}
 
-		baseName := r.Name
-		isHelper := false
-		if strings.HasSuffix(r.Name, "-redir") {
-			baseName = strings.TrimSuffix(r.Name, "-redir")
-			isHelper = true
-		} else if strings.HasSuffix(r.Name, "-http") {
-			baseName = strings.TrimSuffix(r.Name, "-http")
-			isHelper = true
-		}
+		baseName, isHelper := GetServeMountBaseName(r)
 
 		addr := listenerAddrMap[r.Listener]
 		if addr == "" {
@@ -654,6 +646,7 @@ func Status(ctx context.Context, client GatewayClient) ([]api.RouteSpec, error) 
 			if _, exists := mountsMap[baseName]; !exists {
 				primaryMountNames = append(primaryMountNames, baseName)
 			}
+			r.Name = baseName
 			mountsMap[baseName] = r
 		}
 
@@ -724,7 +717,9 @@ func Off(ctx context.Context, client GatewayClient, nameOrPort string) (int, err
 		if !IsServeRoute(r.Name) {
 			continue
 		}
+		baseName, _ := GetServeMountBaseName(r)
 		if r.Name == targetName ||
+			baseName == targetName ||
 			r.Name == targetName+"-redir" ||
 			r.Name == targetName+"-http" ||
 			strings.HasPrefix(r.Name, targetName+"-") ||

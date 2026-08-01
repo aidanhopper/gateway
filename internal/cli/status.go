@@ -69,10 +69,16 @@ func FormatRuleSummary(rule api.RuleSpec) string {
 // FormatTargetsSummary extracts backend target addresses from a handler spec.
 func FormatTargetsSummary(handler api.HandlerSpec) string {
 	if handler.Config == nil {
+		if handler.Next != nil {
+			return FormatTargetsSummary(*handler.Next)
+		}
 		return "-"
 	}
 	if target, ok := handler.Config["target"].(string); ok && target != "" {
 		return target
+	}
+	if urlStr, ok := handler.Config["url"].(string); ok && urlStr != "" {
+		return urlStr
 	}
 	if rawList, ok := handler.Config["targets"].([]any); ok {
 		var targets []string
@@ -87,6 +93,9 @@ func FormatTargetsSummary(handler api.HandlerSpec) string {
 	}
 	if strList, ok := handler.Config["targets"].([]string); ok && len(strList) > 0 {
 		return strings.Join(strList, ",")
+	}
+	if handler.Next != nil {
+		return FormatTargetsSummary(*handler.Next)
 	}
 	return "-"
 }

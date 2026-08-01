@@ -143,6 +143,55 @@ func isNumericPort(s string) bool {
 	return true
 }
 
+// GetServeMountBaseName returns the clean logical mount name for a route, mapping legacy route names if necessary.
+func GetServeMountBaseName(r RouteSpec) (baseName string, isHelper bool) {
+	name := r.Name
+	if strings.HasPrefix(name, "http://") ||
+		strings.HasPrefix(name, "https://") ||
+		strings.HasPrefix(name, "mc://") ||
+		strings.HasPrefix(name, "tcp://") ||
+		strings.HasPrefix(name, "udp://") {
+		if strings.HasSuffix(name, "-redir") {
+			return strings.TrimSuffix(name, "-redir"), true
+		}
+		if strings.HasSuffix(name, "-http") {
+			return strings.TrimSuffix(name, "-http"), true
+		}
+		return name, false
+	}
+
+	// Legacy route names starting with serve-
+	if strings.HasPrefix(name, "serve-") {
+		domain, path := extractRuleDomainAndPathAPI(r.Rule)
+		if domain != "" || (path != "" && path != "/") {
+			proto := "http"
+			if r.Protocol == "https" || strings.Contains(name, "-https") || r.Listener == "serve-https-443" {
+				proto = "https"
+			} else if r.Handler.Type == "http_redirect" {
+				if targetURL, ok := r.Handler.Config["url"].(string); ok && strings.HasPrefix(targetURL, "https://") {
+					proto = "https"
+				}
+			}
+
+			mountArg := domain + path
+			if domain == "" {
+				mountArg = path
+			}
+			mountName := generateMountName(proto, mountArg, "")
+
+			if r.Listener == "serve-http-80" && proto == "https" {
+				return mountName, true
+			}
+			if strings.HasSuffix(name, "-redir") || strings.HasSuffix(name, "-http") {
+				return mountName, true
+			}
+			return mountName, false
+		}
+	}
+
+	return name, false
+}
+
 func (a *API) handleListServeMounts(w http.ResponseWriter, r *http.Request) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -163,15 +212,7 @@ func (a *API) handleListServeMounts(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		baseName := spec.Name
-		isHelper := false
-		if strings.HasSuffix(spec.Name, "-redir") {
-			baseName = strings.TrimSuffix(spec.Name, "-redir")
-			isHelper = true
-		} else if strings.HasSuffix(spec.Name, "-http") {
-			baseName = strings.TrimSuffix(spec.Name, "-http")
-			isHelper = true
-		}
+		baseName, isHelper := GetServeMountBaseName(spec)
 
 		addr := listenerAddrMap[spec.Listener]
 		if addr == "" {
@@ -191,6 +232,7 @@ func (a *API) handleListServeMounts(w http.ResponseWriter, r *http.Request) {
 			if _, exists := mountsMap[baseName]; !exists {
 				primaryMountNames = append(primaryMountNames, baseName)
 			}
+			spec.Name = baseName
 			mountsMap[baseName] = spec
 		}
 
@@ -261,15 +303,25 @@ func (a *API) handleGetServeMount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.mu.RLock()
-	entry, exists := a.routes[name]
+	var foundSpec RouteSpec
+	found := false
+	for routeName, entry := range a.routes {
+		baseName, _ := GetServeMountBaseName(entry.spec)
+		if routeName == name || baseName == name {
+			foundSpec = entry.spec
+			foundSpec.Name = baseName
+			found = true
+			break
+		}
+	}
 	a.mu.RUnlock()
 
-	if !exists || !isServeRoute(name) {
+	if !found || !isServeRoute(name) {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("serve mount %q not found", name))
 		return
 	}
 
-	spec := entry.spec
+	spec := foundSpec
 	now := time.Now()
 	expiresIn := "never"
 	if spec.TTL > 0 {
@@ -984,9 +1036,6 @@ func FormatTargetsSummary(h HandlerSpec) string {
 	}
 	if targetStr, ok := h.Config["target"].(string); ok {
 		return targetStr
-	}
-	if dirStr, ok := h.Config["dir"].(string); ok {
-		return dirStr
 	}
 	if h.Next != nil {
 		return FormatTargetsSummary(*h.Next)

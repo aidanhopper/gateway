@@ -95,6 +95,55 @@ func GenerateMountName(proto string, mount string, target string) string {
 	}
 }
 
+// GetServeMountBaseName returns the clean logical mount name for a route, mapping legacy route names if necessary.
+func GetServeMountBaseName(r api.RouteSpec) (baseName string, isHelper bool) {
+	name := r.Name
+	if strings.HasPrefix(name, "http://") ||
+		strings.HasPrefix(name, "https://") ||
+		strings.HasPrefix(name, "mc://") ||
+		strings.HasPrefix(name, "tcp://") ||
+		strings.HasPrefix(name, "udp://") {
+		if strings.HasSuffix(name, "-redir") {
+			return strings.TrimSuffix(name, "-redir"), true
+		}
+		if strings.HasSuffix(name, "-http") {
+			return strings.TrimSuffix(name, "-http"), true
+		}
+		return name, false
+	}
+
+	// Legacy route names starting with serve-
+	if strings.HasPrefix(name, "serve-") {
+		domain, path := ExtractRuleDomainAndPath(r.Rule)
+		if domain != "" || (path != "" && path != "/") {
+			proto := "http"
+			if r.Protocol == "https" || strings.Contains(name, "-https") || r.Listener == "serve-https-443" {
+				proto = "https"
+			} else if r.Handler.Type == "http_redirect" {
+				if targetURL, ok := r.Handler.Config["url"].(string); ok && strings.HasPrefix(targetURL, "https://") {
+					proto = "https"
+				}
+			}
+
+			mountArg := domain + path
+			if domain == "" {
+				mountArg = path
+			}
+			mountName := GenerateMountName(proto, mountArg, "")
+
+			if r.Listener == "serve-http-80" && proto == "https" {
+				return mountName, true
+			}
+			if strings.HasSuffix(name, "-redir") || strings.HasSuffix(name, "-http") {
+				return mountName, true
+			}
+			return mountName, false
+		}
+	}
+
+	return name, false
+}
+
 // ExtractRuleDomainAndPath extracts host domain and path from a RuleSpec.
 func ExtractRuleDomainAndPath(rule api.RuleSpec) (domain string, path string) {
 	path = "/"
@@ -120,12 +169,6 @@ func ExtractHandlerTarget(h api.HandlerSpec) string {
 	}
 	if targetStr, ok := h.Config["target"].(string); ok {
 		return targetStr
-	}
-	if dirStr, ok := h.Config["dir"].(string); ok {
-		return dirStr
-	}
-	if fileStr, ok := h.Config["file"].(string); ok {
-		return fileStr
 	}
 	if h.Next != nil {
 		return ExtractHandlerTarget(*h.Next)
