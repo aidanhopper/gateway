@@ -335,6 +335,7 @@ func runServeHTTP(ctx context.Context, client *Client, args []string, yesMode bo
 		os.Exit(0)
 	}
 
+	args = ReorderFlagsFirst(fs, args)
 	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
 		fmt.Println("Usage: gateway serve http <path> <target> [flags]")
@@ -385,6 +386,7 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode b
 		os.Exit(0)
 	}
 
+	args = ReorderFlagsFirst(fs, args)
 	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
 		fmt.Println("Usage: gateway serve https <path> <target> [flags]")
@@ -435,6 +437,7 @@ func runServeTCP(ctx context.Context, client *Client, args []string, yesMode boo
 		os.Exit(0)
 	}
 
+	args = ReorderFlagsFirst(fs, args)
 	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
 		fmt.Println("Usage: gateway serve tcp <listen-port> <target> [flags]")
@@ -479,6 +482,7 @@ func runServeUDP(ctx context.Context, client *Client, args []string, yesMode boo
 		os.Exit(0)
 	}
 
+	args = ReorderFlagsFirst(fs, args)
 	_ = fs.Parse(args)
 	if fs.NArg() < 2 {
 		fmt.Println("Usage: gateway serve udp <listen-port> <target> [flags]")
@@ -523,6 +527,56 @@ func (s *stringSliceFlag) Set(val string) error {
 	return nil
 }
 
+// ReorderFlagsFirst reorders CLI arguments so that flags (and their values) precede positional arguments.
+// This allows Go's flag.FlagSet to parse flags correctly regardless of whether they appear before or after positional arguments.
+func ReorderFlagsFirst(fs *flag.FlagSet, args []string) []string {
+	var flagArgs []string
+	var posArgs []string
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		if arg == "--" {
+			posArgs = append(posArgs, args[i:]...)
+			break
+		}
+
+		if strings.HasPrefix(arg, "-") && len(arg) > 1 {
+			name := strings.TrimLeft(arg, "-")
+			hasValue := false
+			if idx := strings.Index(name, "="); idx != -1 {
+				name = name[:idx]
+				hasValue = true
+			}
+
+			flagArgs = append(flagArgs, arg)
+			i++
+
+			if !hasValue && i < len(args) {
+				f := fs.Lookup(name)
+				if f != nil {
+					isBool := false
+					if b, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
+						isBool = true
+					}
+					if !isBool {
+						flagArgs = append(flagArgs, args[i])
+						i++
+					}
+				} else if !strings.HasPrefix(args[i], "-") {
+					flagArgs = append(flagArgs, args[i])
+					i++
+				}
+			}
+		} else {
+			posArgs = append(posArgs, arg)
+			i++
+		}
+	}
+
+	return append(flagArgs, posArgs...)
+}
+
 func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMode bool) {
 	args, watchMode := ExtractWatchAndBGFlags(args)
 
@@ -549,6 +603,7 @@ func runServeMinecraft(ctx context.Context, client *Client, args []string, yesMo
 		os.Exit(0)
 	}
 
+	args = ReorderFlagsFirst(fs, args)
 	_ = fs.Parse(args)
 	if fs.NArg() < 1 {
 		fmt.Println("Usage: gateway serve minecraft <host-or-port> [target] [flags]")
