@@ -73,15 +73,6 @@ type RedirectOptions struct {
 	ACME          bool          `json:"acme,omitempty"`
 }
 
-// StaticOptions configures a static directory or single-page application serve mount.
-type StaticOptions struct {
-	Mount      string        `json:"mount"`
-	Dir        string        `json:"dir"`
-	Priority   int           `json:"priority,omitempty"`
-	TTL        time.Duration `json:"ttl,omitempty"`
-	Background bool          `json:"background,omitempty"`
-	Yes        bool          `json:"yes,omitempty"`
-}
 
 // ServeMountSummary describes an active serve mount for status/list endpoints.
 type ServeMountSummary struct {

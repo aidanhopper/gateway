@@ -421,7 +421,6 @@ func NewHandler(api *API) http.Handler {
 	mux.HandleFunc("GET /api/v1/serve/{name}", auth(api.handleGetServeMount))
 	mux.HandleFunc("POST /api/v1/serve/http", auth(api.handleServeHTTP))
 	mux.HandleFunc("POST /api/v1/serve/https", auth(api.handleServeHTTPS))
-	mux.HandleFunc("POST /api/v1/serve/static", auth(api.handleServeStatic))
 	mux.HandleFunc("POST /api/v1/serve/redirect", auth(api.handleServeRedirect))
 	mux.HandleFunc("POST /api/v1/serve/tcp", auth(api.handleServeTCP))
 	mux.HandleFunc("POST /api/v1/serve/udp", auth(api.handleServeUDP))

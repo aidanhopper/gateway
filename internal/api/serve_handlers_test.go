@@ -197,46 +197,6 @@ func TestAPIServeHTTPSAndRedirectOption(t *testing.T) {
 	}
 }
 
-func TestAPIServeStaticHTTPAndHTTPS(t *testing.T) {
-	apiInstance, _, token := setupTestAPI(t)
-	handler := NewHandler(apiInstance)
-
-	tmpDir := t.TempDir()
-	_ = os.WriteFile(filepath.Join(tmpDir, "index.html"), []byte("<h1>Hello</h1>"), 0644)
-
-	// 1. Serve static HTTP
-	bodyHTTP := fmt.Sprintf(`{"mount":"/static","local_path":%q,"is_http":true,"is_spa":true}`, tmpDir)
-	req := httptest.NewRequest("POST", "/api/v1/serve/static", bytes.NewBufferString(bodyHTTP))
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("POST /api/v1/serve/static (HTTP) failed: %d body: %s", rec.Code, rec.Body.String())
-	}
-
-	var routeHTTP RouteSpec
-	_ = json.Unmarshal(rec.Body.Bytes(), &routeHTTP)
-	if routeHTTP.Listener != "serve-http-80" {
-		t.Errorf("expected listener serve-http-80, got %s", routeHTTP.Listener)
-	}
-
-	// 2. Serve static HTTPS
-	bodyHTTPS := fmt.Sprintf(`{"mount":"static.domain.com/files","local_path":%q,"is_http":false}`, tmpDir)
-	req = httptest.NewRequest("POST", "/api/v1/serve/static", bytes.NewBufferString(bodyHTTPS))
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("POST /api/v1/serve/static (HTTPS) failed: %d body: %s", rec.Code, rec.Body.String())
-	}
-
-	var routeHTTPS RouteSpec
-	_ = json.Unmarshal(rec.Body.Bytes(), &routeHTTPS)
-	if routeHTTPS.Listener != "serve-https-443" {
-		t.Errorf("expected listener serve-https-443, got %s", routeHTTPS.Listener)
-	}
-}
-
 func TestAPIServeRedirectEndpoint(t *testing.T) {
 	os.Unsetenv("GATEWAY_ACME_EMAIL")
 

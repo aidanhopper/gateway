@@ -49,7 +49,6 @@ func init() {
 	DefaultHandlerRegistry.Register("http_add_prefix", HTTPAddPrefixFactory{})
 	DefaultHandlerRegistry.Register("http_headers", HTTPHeadersFactory{})
 	DefaultHandlerRegistry.Register("http_redirect", HTTPRedirectFactory{})
-	DefaultHandlerRegistry.Register("http_static", HTTPStaticFactory{})
 	DefaultHandlerRegistry.Register("http_basic_auth", HTTPBasicAuthFactory{})
 	DefaultHandlerRegistry.Register("http_rate_limit", HTTPRateLimitFactory{})
 	DefaultHandlerRegistry.Register("http_ip_allow", HTTPIPAccessFactory{Mode: "allow"})
@@ -317,20 +316,6 @@ func (f HTTPRedirectFactory) Build(spec HandlerSpec, buildNext BuildNextFunc) (a
 		StripPrefix: stripPrefix,
 		KeepQuery:   keepQuery,
 	}, nil
-}
-
-type HTTPStaticFactory struct{}
-func (f HTTPStaticFactory) Protocol() string { return "http" }
-func (f HTTPStaticFactory) Validate(spec HandlerSpec) error {
-	if dir, ok := spec.Config["dir"].(string); !ok || strings.TrimSpace(dir) == "" {
-		return fmt.Errorf("http_static requires 'dir' string")
-	}
-	return nil
-}
-func (f HTTPStaticFactory) Build(spec HandlerSpec, buildNext BuildNextFunc) (any, error) {
-	dir, _ := spec.Config["dir"].(string)
-	isSPA, _ := spec.Config["spa"].(bool)
-	return handlers.NewHTTPStaticServer(dir, isSPA), nil
 }
 
 type HTTPBasicAuthFactory struct{}

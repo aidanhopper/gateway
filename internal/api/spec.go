@@ -22,7 +22,7 @@ type ListenerSpec struct {
 // HandlerSpec defines an inline handler specification inside a route.
 // Handlers can optionally nest an inner handler via Next for pipeline composition.
 type HandlerSpec struct {
-	Type   string         `json:"type"`             // e.g. "tcp_proxy", "tcp_echo", "http_proxy", "http_static", "udp_echo"
+	Type   string         `json:"type"`             // e.g. "tcp_proxy", "tcp_echo", "http_proxy", "udp_echo"
 	Config map[string]any `json:"config,omitempty"` // type-specific parameters (e.g. target address)
 	Next   *HandlerSpec   `json:"next,omitempty"`   // optional nested inner handler for decorator/middleware handlers
 }

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -28,17 +27,6 @@ type ServeRequestHTTPS struct {
 	TTL        int    `json:"ttl,omitempty"`
 }
 
-// ServeRequestStatic holds payload for POST /api/v1/serve/static
-type ServeRequestStatic struct {
-	Mount      string `json:"mount"`
-	LocalPath  string `json:"local_path"`
-	Priority   int    `json:"priority,omitempty"`
-	IsSPA      bool   `json:"is_spa,omitempty"`
-	IsFile     bool   `json:"is_file,omitempty"`
-	IsHTTP     bool   `json:"is_http,omitempty"`
-	NoRedirect bool   `json:"no_redirect,omitempty"`
-	TTL        int    `json:"ttl,omitempty"`
-}
 
 // ServeRequestRedirect holds payload for POST /api/v1/serve/redirect
 type ServeRequestRedirect struct {
@@ -350,112 +338,6 @@ func (a *API) handleServeHTTPS(w http.ResponseWriter, r *http.Request) {
 				Config: map[string]any{"url": redirectTargetURL, "status": 301},
 			},
 		})
-	}
-
-	writeJSON(w, http.StatusCreated, routeSpec)
-}
-
-func (a *API) handleServeStatic(w http.ResponseWriter, r *http.Request) {
-	var req ServeRequestStatic
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON payload")
-		return
-	}
-
-	if req.Mount == "" || req.LocalPath == "" {
-		writeError(w, http.StatusBadRequest, "fields 'mount' and 'local_path' are required")
-		return
-	}
-
-	domainVal, path := parseMountArg(req.Mount)
-	absDir, err := filepath.Abs(req.LocalPath)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid local_path: %v", err))
-		return
-	}
-
-	handlerSpec := HandlerSpec{
-		Type: "http_static",
-		Config: map[string]any{
-			"dir":    absDir,
-			"spa":    req.IsSPA,
-			"index":  "index.html",
-			"browse": false,
-		},
-	}
-
-	if path != "/" && path != "" && !req.IsFile {
-		inner := handlerSpec
-		handlerSpec = HandlerSpec{
-			Type:   "http_strip_prefix",
-			Config: map[string]any{"prefix": path},
-			Next:   &inner,
-		}
-	}
-
-	lAddr := ":443"
-	if req.IsHTTP {
-		lAddr = ":80"
-	}
-	lName := fmt.Sprintf("serve-https-%s", strings.TrimPrefix(lAddr, ":"))
-	if req.IsHTTP {
-		lName = fmt.Sprintf("serve-http-%s", strings.TrimPrefix(lAddr, ":"))
-	}
-
-	var tlsSpec *TLSConfigSpec
-	if !req.IsHTTP && domainVal != "" {
-		tlsSpec = &TLSConfigSpec{Domains: []string{domainVal}}
-	}
-
-	lSpec := ListenerSpec{
-		Name:     lName,
-		Address:  lAddr,
-		Protocol: "tcp",
-		TLS:      tlsSpec,
-	}
-
-	if err := a.ensureListenerInternal(lSpec); err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to ensure listener: %v", err))
-		return
-	}
-
-	routeName := fmt.Sprintf("serve-dir-%d", time.Now().UnixNano())
-	var rules []RuleSpec
-	if req.IsHTTP {
-		rules = append(rules, RuleSpec{Type: "not", Rule: &RuleSpec{Type: "secure"}})
-	} else {
-		rules = append(rules, RuleSpec{Type: "secure"})
-	}
-
-	if domainVal != "" {
-		rules = append(rules, RuleSpec{Type: "host", Value: domainVal})
-	}
-	if path != "/" && path != "" {
-		if req.IsFile {
-			rules = append(rules, RuleSpec{Type: "path", Value: path})
-		} else {
-			rules = append(rules, RuleSpec{Type: "path_prefix", Value: path})
-		}
-	}
-
-	ruleSpec := rules[0]
-	if len(rules) > 1 {
-		ruleSpec = RuleSpec{Type: "and", Rules: rules}
-	}
-
-	routeSpec := RouteSpec{
-		Name:     routeName,
-		Protocol: "http",
-		Listener: lName,
-		Priority: calculateServeAutoPriority(ruleSpec, req.Priority),
-		TTL:      req.TTL,
-		Rule:     ruleSpec,
-		Handler:  handlerSpec,
-	}
-
-	if err := a.AddRoute(routeSpec); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
 	}
 
 	writeJSON(w, http.StatusCreated, routeSpec)
