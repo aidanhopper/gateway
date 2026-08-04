@@ -17,7 +17,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -296,7 +295,7 @@ func TestAPITTLLeases(t *testing.T) {
 
 func TestACMEAutoCertEmailRequired(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	os.Unsetenv("GATEWAY_ACME_EMAIL")
+	t.Setenv("GATEWAY_ACME_EMAIL", "")
 
 	api, _, token := setupTestAPI(t)
 	handler := NewHandler(api)
@@ -313,7 +312,7 @@ func TestACMEAutoCertEmailRequired(t *testing.T) {
 }
 
 func TestLocalhostTLSCertNoEmailRequired(t *testing.T) {
-	os.Unsetenv("GATEWAY_ACME_EMAIL")
+	t.Setenv("GATEWAY_ACME_EMAIL", "")
 
 	api, _, token := setupTestAPI(t)
 	handler := NewHandler(api)
@@ -330,8 +329,7 @@ func TestLocalhostTLSCertNoEmailRequired(t *testing.T) {
 }
 
 func TestAPIACMEListenerCreationWithEnvVar(t *testing.T) {
-	os.Setenv("GATEWAY_ACME_EMAIL", "admin@test-domain.org")
-	defer os.Unsetenv("GATEWAY_ACME_EMAIL")
+	t.Setenv("GATEWAY_ACME_EMAIL", "admin@test-domain.org")
 
 	api, _, token := setupTestAPI(t)
 	handler := NewHandler(api)
@@ -348,8 +346,7 @@ func TestAPIACMEListenerCreationWithEnvVar(t *testing.T) {
 }
 
 func TestPublicDomainTriggersACMEAutoCert(t *testing.T) {
-	os.Setenv("GATEWAY_ACME_EMAIL", "admin@test-domain.org")
-	defer os.Unsetenv("GATEWAY_ACME_EMAIL")
+	t.Setenv("GATEWAY_ACME_EMAIL", "admin@test-domain.org")
 
 	api, _, token := setupTestAPI(t)
 	handler := NewHandler(api)
