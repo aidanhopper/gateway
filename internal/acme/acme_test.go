@@ -16,7 +16,7 @@ import (
 )
 
 func TestACMEEmailRequired(t *testing.T) {
-	os.Unsetenv("GATEWAY_ACME_EMAIL")
+	t.Setenv("GATEWAY_ACME_EMAIL", "")
 
 	_, err := NewManager(Config{Domains: []string{"test-domain.org"}})
 	if err == nil {
@@ -31,8 +31,7 @@ func TestACMEManagerInitWithEnvVar(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	os.Setenv("GATEWAY_ACME_EMAIL", "admin@test-domain.org")
-	defer os.Unsetenv("GATEWAY_ACME_EMAIL")
+	t.Setenv("GATEWAY_ACME_EMAIL", "admin@test-domain.org")
 
 	mgr, err := NewManager(Config{
 		Domains:   []string{"test-domain.org"},
