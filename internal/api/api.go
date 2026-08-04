@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"sync"
@@ -480,6 +481,9 @@ func (a *API) handleListListeners(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleGetListener(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if unescaped, err := url.PathUnescape(name); err == nil && unescaped != "" {
+		name = unescaped
+	}
 
 	a.mu.RLock()
 	spec, ok := a.listeners[name]
@@ -565,6 +569,9 @@ func (a *API) handleCreateListener(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleDeleteListener(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if unescaped, err := url.PathUnescape(name); err == nil && unescaped != "" {
+		name = unescaped
+	}
 	if err := a.deleteListenerByName(name); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -660,6 +667,9 @@ func (a *API) handleListRoutes(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleGetRoute(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if unescaped, err := url.PathUnescape(name); err == nil && unescaped != "" {
+		name = unescaped
+	}
 
 	a.mu.RLock()
 	entry, ok := a.routes[name]
@@ -749,6 +759,9 @@ func (a *API) handleCreateRoute(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if unescaped, err := url.PathUnescape(name); err == nil && unescaped != "" {
+		name = unescaped
+	}
 
 	var spec RouteSpec
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1048576)).Decode(&spec); err != nil {
@@ -866,6 +879,9 @@ func (a *API) handleUpdateRoute(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleDeleteRoute(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	if unescaped, err := url.PathUnescape(name); err == nil && unescaped != "" {
+		name = unescaped
+	}
 	if err := a.DeleteRoute(name); err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return

@@ -722,8 +722,11 @@ func Off(ctx context.Context, client GatewayClient, nameOrPort string) (int, err
 			baseName == targetName ||
 			r.Name == targetName+"-redir" ||
 			r.Name == targetName+"-http" ||
+			baseName == targetName+"-redir" ||
+			baseName == targetName+"-http" ||
 			strings.HasPrefix(r.Name, targetName+"-") ||
 			strings.Contains(r.Name, targetName) ||
+			strings.Contains(baseName, targetName) ||
 			strings.HasSuffix(r.Listener, "-"+targetName) {
 			if err := client.DeleteRoute(ctx, r.Name); err == nil {
 				deletedCount++

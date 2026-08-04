@@ -783,3 +783,49 @@ func TestGenerateMountName(t *testing.T) {
 	}
 }
 
+func TestServeOffURLStyleMountNames(t *testing.T) {
+	server, client := setupServeMockServer(t)
+	defer server.Close()
+	ctx := context.Background()
+
+	_ = client.CreateListener(ctx, api.ListenerSpec{Name: "serve-https-443", Address: ":443", Protocol: "tcp"})
+	_ = client.CreateRoute(ctx, api.RouteSpec{
+		Name:     "https://ahop.dev/github",
+		Protocol: "http",
+		Listener: "serve-https-443",
+		Rule: api.RuleSpec{
+			Type: "and",
+			Rules: []api.RuleSpec{
+				{Type: "host", Value: "ahop.dev"},
+				{Type: "path_prefix", Value: "/github"},
+			},
+		},
+		Handler: api.HandlerSpec{
+			Type:   "http_redirect",
+			Config: map[string]any{"url": "https://github.com/aidanhopper"},
+		},
+	})
+	_ = client.CreateRoute(ctx, api.RouteSpec{
+		Name:     "mc://porker.ahop.dev",
+		Protocol: "tcp",
+		Listener: "serve-tcp-25565",
+		Rule:     api.RuleSpec{Type: "is_minecraft"},
+	})
+
+	deleted, err := Off(ctx, client, "https://ahop.dev/github")
+	if err != nil {
+		t.Fatalf("Off failed for https://ahop.dev/github: %v", err)
+	}
+	if deleted != 1 {
+		t.Errorf("expected 1 route deleted, got %d", deleted)
+	}
+
+	deletedMC, err := Off(ctx, client, "mc://porker.ahop.dev")
+	if err != nil {
+		t.Fatalf("Off failed for mc://porker.ahop.dev: %v", err)
+	}
+	if deletedMC != 1 {
+		t.Errorf("expected 1 route deleted, got %d", deletedMC)
+	}
+}
+

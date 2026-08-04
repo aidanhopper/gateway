@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -217,7 +218,7 @@ func (c *Client) CreateListener(ctx context.Context, spec api.ListenerSpec) erro
 
 // DeleteListener deletes a listener via API or SQLite fallback.
 func (c *Client) DeleteListener(ctx context.Context, name string) error {
-	_, err := c.request(ctx, "DELETE", fmt.Sprintf("/listeners/%s", name), nil)
+	_, err := c.request(ctx, "DELETE", fmt.Sprintf("/listeners/%s", url.PathEscape(name)), nil)
 	if err == nil {
 		return nil
 	}
@@ -306,7 +307,7 @@ func (c *Client) CreateRoute(ctx context.Context, spec api.RouteSpec) error {
 
 // DeleteRoute deletes a route via API or SQLite fallback.
 func (c *Client) DeleteRoute(ctx context.Context, name string) error {
-	_, err := c.request(ctx, "DELETE", fmt.Sprintf("/routes/%s", name), nil)
+	_, err := c.request(ctx, "DELETE", fmt.Sprintf("/routes/%s", url.PathEscape(name)), nil)
 	if err == nil {
 		return nil
 	}
