@@ -392,6 +392,16 @@ func isProductionCert(cert *tls.Certificate) bool {
 	return true
 }
 
+// FormatRemainingTime formats a future timestamp into human-readable duration and UTC time string.
+func FormatRemainingTime(t time.Time) string {
+	rem := time.Until(t).Round(time.Second)
+	if rem <= 0 {
+		return "0s (expired)"
+	}
+	formattedTime := t.UTC().Format("2006-01-02 15:04:05 MST")
+	return fmt.Sprintf("%v remaining (until %s)", rem, formattedTime)
+}
+
 func (m *Manager) isCertValidAndUsable(cert *tls.Certificate, domains ...string) bool {
 	if !isCertValid(cert) {
 		return false
@@ -400,9 +410,11 @@ func (m *Manager) isCertValidAndUsable(cert *tls.Certificate, domains ...string)
 		for _, d := range domains {
 			if d != "" {
 				rootDomain := ExtractRootDomain(d)
-				if _, limited := m.isRateLimited(rootDomain); limited {
+				if retryAfter, limited := m.isRateLimited(rootDomain); limited {
+					gateway.LogInfo("ACME", "using cached staging certificate for %s because production rate limit is active (%s)", rootDomain, FormatRemainingTime(retryAfter))
 					return true
 				}
+				gateway.LogInfo("ACME", "rate limit for %s is no longer active, will request production certificate from Let's Encrypt", rootDomain)
 			}
 		}
 		return false
@@ -455,6 +467,11 @@ func (m *Manager) loadRateLimits() {
 		m.mu.Lock()
 		for k, v := range raw {
 			m.rateLimits[k] = v
+			if time.Now().Before(v) {
+				gateway.LogInfo("ACME", "loaded active rate limit for %s: %s", k, FormatRemainingTime(v))
+			} else {
+				gateway.LogInfo("ACME", "stored rate limit for %s has expired", k)
+			}
 		}
 		m.mu.Unlock()
 	}
@@ -579,7 +596,7 @@ func (m *Manager) ObtainWildcardCertificate(domain string) (*tls.Certificate, er
 	}
 
 	if retryAfter, limited := m.isRateLimited(rootDomain); limited {
-		gateway.LogInfo("ACME", "domain %s is rate-limited by Let's Encrypt until %v, using staging...", rootDomain, retryAfter.Format("2006-01-02 15:04:05 MST"))
+		gateway.LogInfo("ACME", "skipping production certificate request for %s due to rate limit (%s), falling back to staging...", rootDomain, FormatRemainingTime(retryAfter))
 		return m.obtainStagingCertificate(request, rootDomain, domain)
 	}
 
@@ -592,7 +609,7 @@ func (m *Manager) ObtainWildcardCertificate(domain string) (*tls.Certificate, er
 		if strings.Contains(err.Error(), "rateLimited") || strings.Contains(err.Error(), "too many certificates") {
 			retryAfter := parseRetryAfter(err.Error())
 			m.recordRateLimit(rootDomain, retryAfter)
-			gateway.LogWarn("ACME", "production rate limit hit for %s (retry after %v), falling back to Let's Encrypt staging...", rootDomain, retryAfter.Format("2006-01-02 15:04:05 MST"))
+			gateway.LogWarn("ACME", "production rate limit hit for %s (%s), falling back to Let's Encrypt staging...", rootDomain, FormatRemainingTime(retryAfter))
 			return m.obtainStagingCertificate(request, rootDomain, domain)
 		}
 		if err != nil {
