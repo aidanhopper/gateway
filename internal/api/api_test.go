@@ -347,6 +347,24 @@ func TestAPIACMEListenerCreationWithEnvVar(t *testing.T) {
 	}
 }
 
+func TestPublicDomainTriggersACMEAutoCert(t *testing.T) {
+	os.Setenv("GATEWAY_ACME_EMAIL", "admin@test-domain.org")
+	defer os.Unsetenv("GATEWAY_ACME_EMAIL")
+
+	api, _, token := setupTestAPI(t)
+	handler := NewHandler(api)
+
+	listenerJSON := `{"name":"acme-public-ln","address":":8446","protocol":"tcp","tls":{"auto":false,"domains":["test-domain.org"]}}`
+	req := httptest.NewRequest("POST", "/api/v1/listeners", bytes.NewBufferString(listenerJSON))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for public domain TLS listener, got %d body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestStaticTLSTermination(t *testing.T) {
 	certPEM, keyPEM, err := generateTestTLSCert()
 	if err != nil {

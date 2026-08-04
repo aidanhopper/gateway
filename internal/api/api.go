@@ -94,7 +94,16 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 
 	devCert, _ := acme.GenerateSelfSignedCert(spec.Domains)
 
-	if spec.Auto {
+	hasPublicDomain := false
+	for _, d := range spec.Domains {
+		dStr := strings.ToLower(strings.TrimSpace(d))
+		if dStr != "" && dStr != "localhost" && !strings.HasSuffix(dStr, ".localhost") && !strings.HasSuffix(dStr, ".local") && net.ParseIP(dStr) == nil {
+			hasPublicDomain = true
+			break
+		}
+	}
+
+	if spec.Auto || hasPublicDomain {
 		serverCfg, _ := config.LoadServerConfig()
 		acmeCfg := acme.Config{
 			Domains: spec.Domains,
@@ -107,14 +116,6 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 		acmeMgr, err := acme.NewManager(acmeCfg)
 		if err != nil {
 			LogWarn("ACME", "failed to initialize ACME auto-cert manager: %v", err)
-			hasPublicDomain := false
-			for _, d := range spec.Domains {
-				dStr := strings.ToLower(strings.TrimSpace(d))
-				if dStr != "" && dStr != "localhost" && !strings.HasSuffix(dStr, ".localhost") && !strings.HasSuffix(dStr, ".local") && net.ParseIP(dStr) == nil {
-					hasPublicDomain = true
-					break
-				}
-			}
 			if hasPublicDomain {
 				return nil, fmt.Errorf("failed to initialize ACME auto-cert manager: %w", err)
 			}

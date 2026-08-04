@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -336,5 +337,19 @@ func TestStagingUserAccountIsolation(t *testing.T) {
 
 	if stagingUser.Registration != nil {
 		t.Fatalf("expected fresh stagingUser Registration to be nil before staging registration, got %v", stagingUser.Registration)
+	}
+}
+
+func TestFormatRemainingTime(t *testing.T) {
+	futureTime := time.Now().Add(2 * time.Hour)
+	formatted := FormatRemainingTime(futureTime)
+	if !strings.Contains(formatted, "remaining") || !strings.Contains(formatted, "until") {
+		t.Errorf("expected FormatRemainingTime to contain 'remaining' and 'until', got %q", formatted)
+	}
+
+	pastTime := time.Now().Add(-1 * time.Hour)
+	formattedPast := FormatRemainingTime(pastTime)
+	if formattedPast != "0s (expired)" {
+		t.Errorf("expected '0s (expired)', got %q", formattedPast)
 	}
 }

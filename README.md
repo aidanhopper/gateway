@@ -102,9 +102,9 @@ Expose a local HTTP server running on port 8080 at path `/api`:
 gateway serve http app.example.com/api 8080
 ```
 
-Expose an HTTPS service with automatic ACME certificate generation:
+Expose an HTTPS service:
 ```bash
-gateway serve app.example.com 3000 --acme
+gateway serve https app.example.com 3000
 ```
 
 ### TCP and UDP Stream Proxying

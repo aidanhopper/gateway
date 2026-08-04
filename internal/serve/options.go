@@ -17,7 +17,6 @@ type HTTPSOptions struct {
 	Mount       string        `json:"mount"`
 	Target      string        `json:"target"`
 	Priority    int           `json:"priority,omitempty"`
-	ACME        bool          `json:"acme,omitempty"`
 	NoRedirect  bool          `json:"no_redirect,omitempty"`
 	StripPrefix bool          `json:"strip_prefix,omitempty"`
 	TTL         time.Duration `json:"ttl,omitempty"`
@@ -70,7 +69,6 @@ type RedirectOptions struct {
 	TTL           time.Duration `json:"ttl,omitempty"`
 	Background    bool          `json:"background,omitempty"`
 	Yes           bool          `json:"yes,omitempty"`
-	ACME          bool          `json:"acme,omitempty"`
 }
 
 

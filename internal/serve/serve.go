@@ -121,21 +121,11 @@ func HTTPS(ctx context.Context, client GatewayClient, opts HTTPSOptions) ([]stri
 	lAddr := ":443"
 	lName := "serve-https-443"
 
-	useACME := opts.ACME
-	if domainVal != "" && !useACME {
-		dnsMatch, _, _ := ValidateDNS(domainVal)
-		if dnsMatch {
-			useACME = true
-		}
-	}
-
 	var tlsSpec *api.TLSConfigSpec
-	if useACME || domainVal != "" {
+	if domainVal != "" {
 		tlsSpec = &api.TLSConfigSpec{
-			Auto: useACME,
-		}
-		if domainVal != "" {
-			tlsSpec.Domains = []string{domainVal}
+			Auto:    true,
+			Domains: []string{domainVal},
 		}
 	}
 
@@ -487,11 +477,12 @@ func Redirect(ctx context.Context, client GatewayClient, opts RedirectOptions) (
 
 	var createdRoutes []string
 
-	tlsSpec := &api.TLSConfigSpec{
-		Auto: opts.ACME,
-	}
+	var tlsSpec *api.TLSConfigSpec
 	if domain != "" {
-		tlsSpec.Domains = []string{domain}
+		tlsSpec = &api.TLSConfigSpec{
+			Auto:    true,
+			Domains: []string{domain},
+		}
 	}
 
 	pathRuleType := "path_prefix"

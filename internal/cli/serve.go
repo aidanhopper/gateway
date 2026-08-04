@@ -22,7 +22,7 @@ func PrintServeUsage() {
 	fmt.Println("\nProtocols:")
 	fmt.Println("  redirect (redir) <domain/path> <target-url> Redirect HTTP/HTTPS traffic to external URL")
 	fmt.Println("  http <path> <target>                       Expose local HTTP service (e.g. gateway serve http / 3000)")
-	fmt.Println("  https <path> <target>                      Expose local service over HTTPS (e.g. gateway serve https / 3000 --acme)")
+	fmt.Println("  https <path> <target>                      Expose local service over HTTPS (e.g. gateway serve https app.example.com 3000)")
 	fmt.Println("  tcp <port> <target>                        Expose TCP stream (e.g. gateway serve tcp 2222 127.0.0.1:22)")
 	fmt.Println("  udp <port> <target>                        Expose UDP stream (e.g. gateway serve udp 5353 127.0.0.1:53)")
 	fmt.Println("  minecraft (mc) [domain] [target]           Expose Minecraft server")
@@ -372,7 +372,6 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode b
 
 	fs := flag.NewFlagSet("serve https", flag.ExitOnError)
 	ttlStr := fs.String("ttl", "", "Time to live duration")
-	acme := fs.Bool("acme", true, "Enable automatic Let's Encrypt / ACME TLS cert")
 	noRedirect := fs.Bool("no-redirect", false, "Do not automatically create HTTP to HTTPS redirect route on port 80")
 	priority := fs.Int("priority", 0, "Route priority (0 for auto)")
 	fs.IntVar(priority, "p", 0, "Route priority (shorthand)")
@@ -402,7 +401,6 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode b
 		Mount:      fs.Arg(0),
 		Target:     target,
 		Priority:   *priority,
-		ACME:       *acme,
 		NoRedirect: *noRedirect,
 		TTL:        ttlDuration,
 		Background: !watchMode,
