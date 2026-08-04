@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-acme/lego/v4/lego"
 	"github.com/go-acme/lego/v4/registration"
 )
 
@@ -36,7 +35,7 @@ func TestACMEManagerInitWithEnvVar(t *testing.T) {
 	mgr, err := NewManager(Config{
 		Domains:   []string{"test-domain.org"},
 		CacheDir:  filepath.Join(tmpDir, "certs"),
-		Directory: lego.LEDirectoryStaging,
+		Directory: "mock",
 	})
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
@@ -58,7 +57,7 @@ func TestACMEManagerWithCloudflareTokenAndStagingDirectory(t *testing.T) {
 		Email:           "admin@test-domain.org",
 		Domains:         []string{"test-domain.org"},
 		CacheDir:        filepath.Join(tmpDir, "certs"),
-		Directory:       lego.LEDirectoryStaging,
+		Directory:       "mock",
 		CloudflareToken: "test_cf_api_token_12345",
 	})
 	if err != nil {
@@ -150,8 +149,9 @@ func TestACMECacheReloadPreventsIssuance(t *testing.T) {
 	}
 
 	mgr, err := NewManager(Config{
-		Email:    "admin@cached-domain.com",
-		CacheDir: cacheDir,
+		Email:     "admin@cached-domain.com",
+		CacheDir:  cacheDir,
+		Directory: "mock",
 	})
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
@@ -213,8 +213,9 @@ func TestACMECacheReloadUserModeDirectory(t *testing.T) {
 
 	primaryCacheDir := filepath.Join(t.TempDir(), "primary_certs")
 	mgr, err := NewManager(Config{
-		Email:    "admin@user-domain.com",
-		CacheDir: primaryCacheDir,
+		Email:     "admin@user-domain.com",
+		CacheDir:  primaryCacheDir,
+		Directory: "mock",
 	})
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
@@ -239,8 +240,9 @@ func TestParseRetryAfterAndRateLimitPersistence(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	mgr, err := NewManager(Config{
-		Email:    "admin@test-domain.org",
-		CacheDir: tmpDir,
+		Email:     "admin@test-domain.org",
+		CacheDir:  tmpDir,
+		Directory: "mock",
 	})
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
@@ -259,8 +261,9 @@ func TestParseRetryAfterAndRateLimitPersistence(t *testing.T) {
 
 	// Verify persistence in rate_limits.json across manager reload
 	mgr2, err := NewManager(Config{
-		Email:    "admin@test-domain.org",
-		CacheDir: tmpDir,
+		Email:     "admin@test-domain.org",
+		CacheDir:  tmpDir,
+		Directory: "mock",
 	})
 	if err != nil {
 		t.Fatalf("NewManager reload failed: %v", err)
@@ -299,8 +302,9 @@ func TestIsProductionCertAndUpgradeDetection(t *testing.T) {
 func TestRateLimitExpirationClearsLimit(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr, err := NewManager(Config{
-		Email:    "admin@test-domain.org",
-		CacheDir: tmpDir,
+		Email:     "admin@test-domain.org",
+		CacheDir:  tmpDir,
+		Directory: "mock",
 	})
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
@@ -317,8 +321,9 @@ func TestRateLimitExpirationClearsLimit(t *testing.T) {
 func TestStagingUserAccountIsolation(t *testing.T) {
 	tmpDir := t.TempDir()
 	mgr, err := NewManager(Config{
-		Email:    "admin@staging-test.org",
-		CacheDir: tmpDir,
+		Email:     "admin@staging-test.org",
+		CacheDir:  tmpDir,
+		Directory: "mock",
 	})
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
@@ -350,5 +355,25 @@ func TestFormatRemainingTime(t *testing.T) {
 	formattedPast := FormatRemainingTime(pastTime)
 	if formattedPast != "0s (expired)" {
 		t.Errorf("expected '0s (expired)', got %q", formattedPast)
+	}
+}
+
+func TestACMEMockIssuance(t *testing.T) {
+	tmpDir := t.TempDir()
+	mgr, err := NewManager(Config{
+		Email:     "admin@mock-domain.org",
+		CacheDir:  tmpDir,
+		Directory: "mock",
+	})
+	if err != nil {
+		t.Fatalf("NewManager mock failed: %v", err)
+	}
+
+	cert, err := mgr.ObtainWildcardCertificate("mock-domain.org")
+	if err != nil {
+		t.Fatalf("ObtainWildcardCertificate failed in mock mode: %v", err)
+	}
+	if cert == nil || len(cert.Certificate) == 0 {
+		t.Fatalf("expected valid mock certificate, got nil or empty")
 	}
 }

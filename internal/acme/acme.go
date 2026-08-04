@@ -139,6 +139,43 @@ func GenerateSelfSignedCert(dnsNames []string) (*tls.Certificate, error) {
 	}, nil
 }
 
+// DefaultMockObtainer generates a mock certificate.Resource with self-signed PEM bytes.
+func DefaultMockObtainer(domains []string) (*certificate.Resource, error) {
+	cert, err := GenerateSelfSignedCert(domains)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate mock cert: %w", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: cert.Certificate[0],
+	})
+
+	privKeyBytes, err := x509.MarshalECPrivateKey(cert.PrivateKey.(*ecdsa.PrivateKey))
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal mock private key: %w", err)
+	}
+
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: privKeyBytes,
+	})
+
+	domain := "mock-domain"
+	if len(domains) > 0 {
+		domain = domains[0]
+	}
+
+	return &certificate.Resource{
+		Domain:            domain,
+		CertURL:           "https://mock-acme.local/cert/1",
+		CertStableURL:     "https://mock-acme.local/cert/1",
+		PrivateKey:        keyPEM,
+		Certificate:       certPEM,
+		IssuerCertificate: certPEM,
+	}, nil
+}
+
 // User represents an ACME user account for Lego.
 type User struct {
 	Email        string
@@ -155,8 +192,9 @@ type Config struct {
 	Email           string   // ACME contact email (defaults to GATEWAY_ACME_EMAIL)
 	Domains         []string // List of root domains for wildcard certificate issuance
 	CacheDir        string   // Path to cache directory (defaults to ~/.gateway/acme_certs)
-	Directory       string   // ACME directory URL (defaults to Let's Encrypt production)
+	Directory       string   // ACME directory URL (defaults to Let's Encrypt production; set to "mock" for testing)
 	CloudflareToken string   // Cloudflare API token for DNS-01 wildcard certificates
+	MockObtainer    func(domains []string) (*certificate.Resource, error) // Optional mock certificate obtainer for testing
 }
 
 // Manager manages ACME wildcard certificate issuance and caching via Lego DNS-01.
@@ -166,6 +204,8 @@ type Manager struct {
 	cacheDir     string
 	hasDNS       bool
 	isProduction bool
+	isMock       bool
+	mockObtainer func(domains []string) (*certificate.Resource, error)
 	mu           sync.RWMutex
 	certs        map[string]*tls.Certificate
 	rateLimits   map[string]time.Time
@@ -215,36 +255,50 @@ func NewManager(cfg Config) (*Manager, error) {
 	if dirURL == "" {
 		dirURL = strings.TrimSpace(os.Getenv("GATEWAY_ACME_DIRECTORY"))
 	}
-	if dirURL != "" {
-		legoCfg.CADirURL = dirURL
-	}
-	isProduction := dirURL == "" || dirURL == lego.LEDirectoryProduction
 
-	client, err := lego.NewClient(legoCfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create lego client: %w", err)
-	}
-
-	cfToken := strings.TrimSpace(cfg.CloudflareToken)
-	if cfToken == "" {
-		cfToken = strings.TrimSpace(os.Getenv("CF_DNS_API_TOKEN"))
-	}
-	if cfToken == "" {
-		cfToken = strings.TrimSpace(os.Getenv("CLOUDFLARE_DNS_API_TOKEN"))
-	}
-
+	isMock := dirURL == "mock" || strings.HasPrefix(dirURL, "mock://") || cfg.MockObtainer != nil
+	mockObtainer := cfg.MockObtainer
 	hasDNS := false
-	if cfToken != "" {
-		_ = os.Setenv("CLOUDFLARE_DNS_API_TOKEN", cfToken)
-		cfConfig := cloudflare.NewDefaultConfig()
-		cfConfig.AuthToken = cfToken
-		if dnsProvider, err := cloudflare.NewDNSProviderConfig(cfConfig); err == nil {
+	var client *lego.Client
+	isProduction := false
+
+	if isMock {
+		hasDNS = true
+		if mockObtainer == nil {
+			mockObtainer = DefaultMockObtainer
+		}
+	} else {
+		if dirURL != "" {
+			legoCfg.CADirURL = dirURL
+		}
+		isProduction = dirURL == "" || dirURL == lego.LEDirectoryProduction
+
+		var err error
+		client, err = lego.NewClient(legoCfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create lego client: %w", err)
+		}
+
+		cfToken := strings.TrimSpace(cfg.CloudflareToken)
+		if cfToken == "" {
+			cfToken = strings.TrimSpace(os.Getenv("CF_DNS_API_TOKEN"))
+		}
+		if cfToken == "" {
+			cfToken = strings.TrimSpace(os.Getenv("CLOUDFLARE_DNS_API_TOKEN"))
+		}
+
+		if cfToken != "" {
+			_ = os.Setenv("CLOUDFLARE_DNS_API_TOKEN", cfToken)
+			cfConfig := cloudflare.NewDefaultConfig()
+			cfConfig.AuthToken = cfToken
+			if dnsProvider, err := cloudflare.NewDNSProviderConfig(cfConfig); err == nil {
+				_ = client.Challenge.SetDNS01Provider(dnsProvider)
+				hasDNS = true
+			}
+		} else if dnsProvider, err := cloudflare.NewDNSProvider(); err == nil {
 			_ = client.Challenge.SetDNS01Provider(dnsProvider)
 			hasDNS = true
 		}
-	} else if dnsProvider, err := cloudflare.NewDNSProvider(); err == nil {
-		_ = client.Challenge.SetDNS01Provider(dnsProvider)
-		hasDNS = true
 	}
 
 	mgr := &Manager{
@@ -253,6 +307,8 @@ func NewManager(cfg Config) (*Manager, error) {
 		client:       client,
 		hasDNS:       hasDNS,
 		isProduction: isProduction,
+		isMock:       isMock,
+		mockObtainer: mockObtainer,
 		certs:        make(map[string]*tls.Certificate),
 		rateLimits:   make(map[string]time.Time),
 	}
@@ -336,6 +392,14 @@ func (m *Manager) ensureRegistered() error {
 	defer m.mu.Unlock()
 
 	if m.registered {
+		return nil
+	}
+
+	if m.isMock {
+		m.user.Registration = &registration.Resource{
+			URI: "https://mock-acme.local/acct/1",
+		}
+		m.registered = true
 		return nil
 	}
 
@@ -506,7 +570,36 @@ func (m *Manager) recordRateLimit(domain string, retryAfter time.Time) {
 	m.saveRateLimits()
 }
 
+func (m *Manager) obtainMockCertificate(request certificate.ObtainRequest, rootDomain, domain string) (*tls.Certificate, error) {
+	res, err := m.mockObtainer(request.Domains)
+	if err != nil {
+		return nil, fmt.Errorf("mock obtain wildcard cert failed for %s: %w", rootDomain, err)
+	}
+	tlsCert, err := tls.X509KeyPair(res.Certificate, res.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse mock wildcard cert pair: %w", err)
+	}
+
+	crtPath := filepath.Join(m.cacheDir, rootDomain+".crt")
+	keyPath := filepath.Join(m.cacheDir, rootDomain+".key")
+	_ = os.WriteFile(crtPath, res.Certificate, 0600)
+	_ = os.WriteFile(keyPath, res.PrivateKey, 0600)
+
+	wildcardDomain := "*." + rootDomain
+	m.mu.Lock()
+	m.certs[wildcardDomain] = &tlsCert
+	m.certs[rootDomain] = &tlsCert
+	m.certs[domain] = &tlsCert
+	m.mu.Unlock()
+
+	return &tlsCert, nil
+}
+
 func (m *Manager) obtainStagingCertificate(request certificate.ObtainRequest, rootDomain, domain string) (*tls.Certificate, error) {
+	if m.isMock {
+		return m.obtainMockCertificate(request, rootDomain, domain)
+	}
+
 	stagingUser := &User{
 		Email: m.user.Email,
 		key:   m.user.key,
@@ -593,6 +686,10 @@ func (m *Manager) ObtainWildcardCertificate(domain string) (*tls.Certificate, er
 	request := certificate.ObtainRequest{
 		Domains: []string{wildcardDomain, rootDomain},
 		Bundle:  true,
+	}
+
+	if m.isMock {
+		return m.obtainMockCertificate(request, rootDomain, domain)
 	}
 
 	if retryAfter, limited := m.isRateLimited(rootDomain); limited {
