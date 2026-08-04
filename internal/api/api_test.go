@@ -74,6 +74,7 @@ func generateTestTLSCert() (certPEM string, keyPEM string, err error) {
 }
 
 func setupTestAPI(t *testing.T) (*API, *gateway.Gateway, string) {
+	t.Setenv("GATEWAY_ACME_DIRECTORY", "mock")
 	db, err := OpenDB(":memory:")
 	if err != nil {
 		t.Fatalf("OpenDB failed: %v", err)
@@ -312,6 +313,7 @@ func TestACMEAutoCertEmailRequired(t *testing.T) {
 }
 
 func TestLocalhostTLSCertNoEmailRequired(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GATEWAY_ACME_EMAIL", "")
 
 	api, _, token := setupTestAPI(t)
