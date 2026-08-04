@@ -190,10 +190,10 @@ func applyServerEnvOverrides(cfg *ServerConfig) {
 	if v := os.Getenv("GATEWAY_PUBLIC"); v != "" {
 		cfg.Public = strings.EqualFold(v, "true") || v == "1"
 	}
-	if v := os.Getenv("GATEWAY_ACME_EMAIL"); v != "" {
+	if v, ok := os.LookupEnv("GATEWAY_ACME_EMAIL"); ok {
 		cfg.ACMEEmail = v
 	}
-	if v := os.Getenv("GATEWAY_ACME_DIRECTORY"); v != "" {
+	if v, ok := os.LookupEnv("GATEWAY_ACME_DIRECTORY"); ok {
 		cfg.ACMEDirectory = v
 	}
 	if v := os.Getenv("CLOUDFLARE_DNS_API_TOKEN"); v != "" {

@@ -116,7 +116,7 @@ func buildTLSHandler(spec *TLSConfigSpec) (gateway.TLSConfigHandler, error) {
 		acmeMgr, err := acme.NewManager(acmeCfg)
 		if err != nil {
 			LogWarn("ACME", "failed to initialize ACME auto-cert manager: %v", err)
-			if hasPublicDomain {
+			if spec.Auto {
 				return nil, fmt.Errorf("failed to initialize ACME auto-cert manager: %w", err)
 			}
 		} else if acmeMgr != nil {

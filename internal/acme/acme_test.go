@@ -15,6 +15,7 @@ import (
 )
 
 func TestACMEEmailRequired(t *testing.T) {
+	t.Setenv("GATEWAY_ACME_DIRECTORY", "")
 	t.Setenv("GATEWAY_ACME_EMAIL", "")
 
 	_, err := NewManager(Config{Domains: []string{"test-domain.org"}})

@@ -222,6 +222,17 @@ func NewManager(cfg Config) (*Manager, error) {
 	if email == "" {
 		email = strings.TrimSpace(os.Getenv("GATEWAY_ACME_EMAIL"))
 	}
+
+	dirURL := strings.TrimSpace(cfg.Directory)
+	if dirURL == "" {
+		dirURL = strings.TrimSpace(os.Getenv("GATEWAY_ACME_DIRECTORY"))
+	}
+
+	isMock := dirURL == "mock" || strings.HasPrefix(dirURL, "mock://") || cfg.MockObtainer != nil
+	if email == "" && isMock {
+		email = "mock@example.com"
+	}
+
 	if email == "" {
 		return nil, errors.New("ACME auto-cert requires an email (set email in /etc/gateway/server.yaml or GATEWAY_ACME_EMAIL)")
 	}
@@ -251,12 +262,6 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 
 	legoCfg := lego.NewConfig(user)
-	dirURL := strings.TrimSpace(cfg.Directory)
-	if dirURL == "" {
-		dirURL = strings.TrimSpace(os.Getenv("GATEWAY_ACME_DIRECTORY"))
-	}
-
-	isMock := dirURL == "mock" || strings.HasPrefix(dirURL, "mock://") || cfg.MockObtainer != nil
 	mockObtainer := cfg.MockObtainer
 	hasDNS := false
 	var client *lego.Client

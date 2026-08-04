@@ -299,6 +299,7 @@ func TestACMEAutoCertEmailRequired(t *testing.T) {
 	t.Setenv("GATEWAY_ACME_EMAIL", "")
 
 	api, _, token := setupTestAPI(t)
+	t.Setenv("GATEWAY_ACME_DIRECTORY", "")
 	handler := NewHandler(api)
 
 	listenerJSON := `{"name":"acme-ln","address":":8443","protocol":"tcp","tls":{"auto":true,"domains":["example.com"]}}`
