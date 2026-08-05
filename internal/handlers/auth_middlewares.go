@@ -43,126 +43,191 @@ const loginHTMLTemplate = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Authentication Required - Gateway</title>
+    <title>Authentication Required — Gateway</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background: #0f172a;
-            color: #f8fafc;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0b0f19;
+            color: #f3f4f6;
             display: flex;
             align-items: center;
             justify-content: center;
             min-height: 100vh;
-            padding: 1rem;
+            padding: 1.5rem;
         }
+
         .card {
-            background: #1e293b;
-            border: 1px solid #334155;
-            border-radius: 12px;
-            padding: 2.5rem 2rem;
+            background: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 14px;
+            padding: 2.25rem 2rem;
             width: 100%;
-            max-width: 400px;
-            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+            max-width: 380px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
             text-align: center;
         }
-        .icon {
-            font-size: 2.5rem;
-            margin-bottom: 1rem;
+
+        .icon-badge {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 1rem;
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.35rem;
         }
+
         h1 {
-            font-size: 1.5rem;
+            font-size: 1.35rem;
             font-weight: 600;
-            margin-bottom: 0.5rem;
-            color: #f8fafc;
+            margin-bottom: 0.375rem;
+            color: #ffffff;
+            letter-spacing: -0.01em;
         }
+
         p.subtitle {
             font-size: 0.875rem;
-            color: #94a3b8;
+            color: #9ca3af;
             margin-bottom: 1.5rem;
+            line-height: 1.4;
         }
+
+        /* Error Banner */
         .error-banner {
-            background: rgba(239, 68, 68, 0.15);
-            border: 1px solid #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
             color: #fca5a5;
             padding: 0.75rem;
-            border-radius: 6px;
+            border-radius: 8px;
             font-size: 0.875rem;
+            font-weight: 500;
             margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-align: left;
         }
+
         .form-group {
             margin-bottom: 1.25rem;
             text-align: left;
+            position: relative;
         }
+
         label {
             display: block;
-            font-size: 0.875rem;
+            font-size: 0.8125rem;
             font-weight: 500;
-            color: #cbd5e1;
+            color: #d1d5db;
             margin-bottom: 0.5rem;
         }
+
+        .input-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
         input[type="password"], input[type="text"] {
             width: 100%;
             padding: 0.75rem 1rem;
-            background: #0f172a;
-            border: 1px solid #475569;
-            border-radius: 6px;
-            color: #fff;
-            font-size: 1rem;
+            background: #1f2937;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            color: #ffffff;
+            font-size: 0.95rem;
             outline: none;
-            transition: border-color 0.2s;
+            transition: border-color 0.15s;
         }
+
         input[type="password"]:focus, input[type="text"]:focus {
             border-color: #3b82f6;
             box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
         }
+
         .pin-input {
             letter-spacing: 0.4em;
             text-align: center;
-            font-family: monospace;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             font-size: 1.25rem;
+            font-weight: 600;
         }
-        button {
+
+        .toggle-btn {
+            position: absolute;
+            right: 0.75rem;
+            background: none;
+            border: none;
+            color: #6b7280;
+            cursor: pointer;
+            padding: 0.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .toggle-btn:hover {
+            color: #9ca3af;
+        }
+
+        button[type="submit"] {
             width: 100%;
             padding: 0.75rem;
             background: #2563eb;
-            color: white;
+            color: #ffffff;
             border: none;
-            border-radius: 6px;
-            font-size: 1rem;
+            border-radius: 8px;
+            font-size: 0.95rem;
             font-weight: 600;
             cursor: pointer;
-            transition: background-color 0.2s;
+            transition: background-color 0.15s;
         }
-        button:hover {
+
+        button[type="submit"]:hover {
             background: #1d4ed8;
         }
+
         .footer {
             margin-top: 1.5rem;
             font-size: 0.75rem;
-            color: #64748b;
+            color: #6b7280;
         }
     </style>
 </head>
 <body>
     <div class="card">
-        <div class="icon">🔐</div>
+        <div class="icon-badge">🔐</div>
         <h1>Authentication Required</h1>
-        <p class="subtitle">Please enter your {{ .AuthTypeName }} to access this service.</p>
+        <p class="subtitle">Enter your {{ .AuthTypeName }} to access this service.</p>
 
         {{ if .Error }}
-        <div class="error-banner">{{ .Error }}</div>
+        <div class="error-banner">
+            <span>⚠️</span>
+            <span>{{ .Error }}</span>
+        </div>
         {{ end }}
 
         <form method="POST" action="/_gateway/auth/login">
             <input type="hidden" name="rd" value="{{ .RedirectURL }}">
             <div class="form-group">
                 <label for="secret">{{ .AuthTypeName }}</label>
-                {{ if eq .AuthType "pin" }}
-                <input type="text" id="secret" name="secret" class="pin-input" placeholder="••••••" maxlength="12" required autofocus autocomplete="off">
-                {{ else }}
-                <input type="password" id="secret" name="secret" placeholder="Enter password" required autofocus>
-                {{ end }}
+                <div class="input-wrapper">
+                    {{ if eq .AuthType "pin" }}
+                    <input type="text" id="secret" name="secret" class="pin-input" placeholder="••••••" maxlength="12" inputmode="numeric" pattern="[0-9]*" required autofocus autocomplete="off">
+                    {{ else }}
+                    <input type="password" id="secret" name="secret" placeholder="Enter password" required autofocus>
+                    <button type="button" class="toggle-btn" onclick="togglePasswordVisibility()" aria-label="Toggle password visibility">
+                        <svg id="eye-icon" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </button>
+                    {{ end }}
+                </div>
             </div>
             <button type="submit">Unlock Service</button>
         </form>
@@ -171,6 +236,18 @@ const loginHTMLTemplate = `<!DOCTYPE html>
             Protected by Gateway
         </div>
     </div>
+
+    <script>
+        function togglePasswordVisibility() {
+            const input = document.getElementById('secret');
+            if (!input) return;
+            if (input.type === 'password') {
+                input.type = 'text';
+            } else {
+                input.type = 'password';
+            }
+        }
+    </script>
 </body>
 </html>`
 
