@@ -6,11 +6,19 @@ import (
 	"encoding/hex"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
+
+type ipAttemptTracker struct {
+	failures    int
+	lockUntil   time.Time
+	lastAttempt time.Time
+}
 
 // HTTPAuth enforces password or PIN authentication for HTTP/HTTPS routes.
 type HTTPAuth struct {
@@ -20,6 +28,9 @@ type HTTPAuth struct {
 	RouteName    string // route identifier for cookie validation
 	CookieSecret []byte // secret key used to sign HMAC cookies
 	Next         http.Handler
+
+	mu       sync.Mutex
+	attempts map[string]*ipAttemptTracker
 }
 
 func (h *HTTPAuth) cookieName() string {
@@ -206,6 +217,78 @@ func (h *HTTPAuth) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, loginURL, http.StatusFound)
 }
 
+func (h *HTTPAuth) clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	return host
+}
+
+func (h *HTTPAuth) checkLockout(ip string) (bool, time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.attempts == nil {
+		h.attempts = make(map[string]*ipAttemptTracker)
+		return false, 0
+	}
+
+	tracker, ok := h.attempts[ip]
+	if !ok {
+		return false, 0
+	}
+
+	now := time.Now()
+	if tracker.failures >= 5 {
+		if now.Before(tracker.lockUntil) {
+			return true, tracker.lockUntil.Sub(now)
+		}
+		// Lockout expired, reset tracker
+		tracker.failures = 0
+		tracker.lockUntil = time.Time{}
+	}
+	return false, 0
+}
+
+func (h *HTTPAuth) recordFailure(ip string) (int, bool, time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.attempts == nil {
+		h.attempts = make(map[string]*ipAttemptTracker)
+	}
+
+	now := time.Now()
+	tracker, ok := h.attempts[ip]
+	if !ok {
+		tracker = &ipAttemptTracker{}
+		h.attempts[ip] = tracker
+	}
+
+	tracker.failures++
+	tracker.lastAttempt = now
+
+	locked := false
+	remaining := time.Duration(0)
+	if tracker.failures >= 5 {
+		tracker.lockUntil = now.Add(15 * time.Minute)
+		locked = true
+		remaining = 15 * time.Minute
+	}
+
+	return tracker.failures, locked, remaining
+}
+
+func (h *HTTPAuth) recordSuccess(ip string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.attempts != nil {
+		delete(h.attempts, ip)
+	}
+}
+
 func (h *HTTPAuth) handleAuthEndpoint(w http.ResponseWriter, r *http.Request) {
 	authTypeName := "Password"
 	if strings.EqualFold(h.AuthType, "pin") {
@@ -240,6 +323,24 @@ func (h *HTTPAuth) handleAuthEndpoint(w http.ResponseWriter, r *http.Request) {
 				rd = "/"
 			}
 
+			ip := h.clientIP(r)
+			if locked, remaining := h.checkLockout(ip); locked {
+				secs := int(remaining.Seconds())
+				if secs <= 0 {
+					secs = 900
+				}
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", secs))
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusTooManyRequests)
+				parsedLoginTemplate.Execute(w, loginPageData{
+					AuthType:     strings.ToLower(h.AuthType),
+					AuthTypeName: authTypeName,
+					RedirectURL:  rd,
+					Error:        fmt.Sprintf("Too many failed attempts. Account locked for %d minutes.", (secs+59)/60),
+				})
+				return
+			}
+
 			targetSecret := h.Password
 			if strings.EqualFold(h.AuthType, "pin") {
 				targetSecret = h.PIN
@@ -248,16 +349,35 @@ func (h *HTTPAuth) handleAuthEndpoint(w http.ResponseWriter, r *http.Request) {
 			valid := subtle.ConstantTimeCompare([]byte(submittedSecret), []byte(targetSecret)) == 1
 
 			if !valid {
+				failures, locked, remaining := h.recordFailure(ip)
+				time.Sleep(300 * time.Millisecond) // Artificial throttle delay
+
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				w.WriteHeader(http.StatusUnauthorized)
+				status := http.StatusUnauthorized
+				errMsg := fmt.Sprintf("Invalid %s. Please try again.", authTypeName)
+				if locked {
+					status = http.StatusTooManyRequests
+					secs := int(remaining.Seconds())
+					if secs <= 0 {
+						secs = 900
+					}
+					w.Header().Set("Retry-After", fmt.Sprintf("%d", secs))
+					errMsg = fmt.Sprintf("Too many failed attempts. Account locked for %d minutes.", (secs+59)/60)
+				} else if failures >= 3 {
+					errMsg = fmt.Sprintf("Invalid %s. %d attempts remaining.", authTypeName, 5-failures)
+				}
+
+				w.WriteHeader(status)
 				parsedLoginTemplate.Execute(w, loginPageData{
 					AuthType:     strings.ToLower(h.AuthType),
 					AuthTypeName: authTypeName,
 					RedirectURL:  rd,
-					Error:        fmt.Sprintf("Invalid %s. Please try again.", authTypeName),
+					Error:        errMsg,
 				})
 				return
 			}
+
+			h.recordSuccess(ip)
 
 			// Issue signed session cookie
 			token, err := GenerateAuthToken(h.RouteName, h.CookieSecret, 24*time.Hour)

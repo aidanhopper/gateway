@@ -146,3 +146,58 @@ func TestHTTPAuthMiddleware_PIN(t *testing.T) {
 		t.Errorf("expected 200 with PIN Protected Content, got code %d body %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestHTTPAuthMiddleware_BruteForceLockout(t *testing.T) {
+	secret := []byte("secret-key-789")
+	authMiddleware := &HTTPAuth{
+		AuthType:     "pin",
+		PIN:          "123456",
+		RouteName:    "lockout-route",
+		CookieSecret: secret,
+	}
+
+	clientIP := "192.0.2.42:54321"
+
+	// Submit 4 failed attempts
+	for i := 1; i <= 4; i++ {
+		form := url.Values{}
+		form.Set("secret", "000000")
+		req := httptest.NewRequest("POST", "/_gateway/auth/login", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = clientIP
+		rec := httptest.NewRecorder()
+		authMiddleware.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("expected attempt %d to return 401, got %d", i, rec.Code)
+		}
+	}
+
+	// 5th failed attempt -> 429 Too Many Requests
+	form := url.Values{}
+	form.Set("secret", "000000")
+	req := httptest.NewRequest("POST", "/_gateway/auth/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = clientIP
+	rec := httptest.NewRecorder()
+	authMiddleware.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 5th failed attempt to trigger 429 lockout, got %d", rec.Code)
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Errorf("expected Retry-After header on 429 lockout response")
+	}
+
+	// 6th attempt even with CORRECT PIN while locked out -> 429 Too Many Requests
+	form.Set("secret", "123456")
+	req = httptest.NewRequest("POST", "/_gateway/auth/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = clientIP
+	rec = httptest.NewRecorder()
+	authMiddleware.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected attempt while locked out to return 429, got %d", rec.Code)
+	}
+}
