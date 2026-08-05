@@ -2,12 +2,24 @@ package serve
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"strings"
 
 	"github.com/aidanhopper/gateway/internal/api"
 )
+
+// GenerateRandomPIN creates a random 6-digit numeric PIN string (100000 - 999999).
+func GenerateRandomPIN() (string, error) {
+	var num uint32
+	if err := binary.Read(rand.Reader, binary.BigEndian, &num); err != nil {
+		return "", fmt.Errorf("failed to generate random PIN: %w", err)
+	}
+	pin := (num % 900000) + 100000
+	return fmt.Sprintf("%06d", pin), nil
+}
 
 // GatewayClient defines the REST operations required by serve.
 type GatewayClient interface {

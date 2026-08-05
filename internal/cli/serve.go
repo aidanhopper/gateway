@@ -369,10 +369,13 @@ func runServeHTTP(ctx context.Context, client *Client, args []string, yesMode bo
 
 func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode bool) {
 	args, watchMode := ExtractWatchAndBGFlags(args)
+	args, pinValue, pinSet := extractPinFlag(args)
 
 	fs := flag.NewFlagSet("serve https", flag.ExitOnError)
 	ttlStr := fs.String("ttl", "", "Time to live duration")
 	noRedirect := fs.Bool("no-redirect", false, "Do not automatically create HTTP to HTTPS redirect route on port 80")
+	password := fs.String("password", "", "Require static password authentication for this HTTPS route")
+	_ = fs.String("pin", "", "Require PIN authentication (generates random PIN if specified without code)")
 	priority := fs.Int("priority", 0, "Route priority (0 for auto)")
 	fs.IntVar(priority, "p", 0, "Route priority (shorthand)")
 	_ = fs.Bool("bg", false, "Run in background mode")
@@ -396,12 +399,19 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode b
 		log.Fatalf("invalid ttl: %v", err)
 	}
 
+	pinOpt := ""
+	if pinSet {
+		pinOpt = pinValue
+	}
+
 	target := fs.Arg(1)
 	routes, err := serve.HTTPS(ctx, client, serve.HTTPSOptions{
 		Mount:      fs.Arg(0),
 		Target:     target,
 		Priority:   *priority,
 		NoRedirect: *noRedirect,
+		Password:   *password,
+		PIN:        pinOpt,
 		TTL:        ttlDuration,
 		Background: !watchMode,
 		Yes:        yesMode,
@@ -415,6 +425,45 @@ func runServeHTTPS(ctx context.Context, client *Client, args []string, yesMode b
 	if watchMode && len(routes) > 0 {
 		WatchAndCleanup(client, routes...)
 	}
+}
+
+func extractPinFlag(args []string) ([]string, string, bool) {
+	var clean []string
+	pinVal := ""
+	found := false
+
+	i := 0
+	for i < len(args) {
+		arg := args[i]
+		if arg == "--pin" || arg == "-pin" {
+			found = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				// Check if args[i+1] looks like a PIN value vs positional target
+				val := args[i+1]
+				if len(val) == 6 || strings.EqualFold(val, "true") || strings.EqualFold(val, "auto") {
+					pinVal = val
+					i += 2
+					continue
+				}
+			}
+			pinVal = "true"
+			i++
+			continue
+		} else if strings.HasPrefix(arg, "--pin=") || strings.HasPrefix(arg, "-pin=") {
+			found = true
+			parts := strings.SplitN(arg, "=", 2)
+			if len(parts) == 2 && parts[1] != "" {
+				pinVal = parts[1]
+			} else {
+				pinVal = "true"
+			}
+			i++
+			continue
+		}
+		clean = append(clean, arg)
+		i++
+	}
+	return clean, pinVal, found
 }
 
 func runServeTCP(ctx context.Context, client *Client, args []string, yesMode bool) {

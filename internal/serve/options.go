@@ -19,6 +19,8 @@ type HTTPSOptions struct {
 	Priority    int           `json:"priority,omitempty"`
 	NoRedirect  bool          `json:"no_redirect,omitempty"`
 	StripPrefix bool          `json:"strip_prefix,omitempty"`
+	Password    string        `json:"password,omitempty"`
+	PIN         string        `json:"pin,omitempty"`
 	TTL         time.Duration `json:"ttl,omitempty"`
 	Background  bool          `json:"background,omitempty"`
 	Yes         bool          `json:"yes,omitempty"`

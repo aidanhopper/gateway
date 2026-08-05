@@ -163,6 +163,37 @@ func HTTPS(ctx context.Context, client GatewayClient, opts HTTPSOptions) ([]stri
 		}
 	}
 
+	var activePIN string
+	authType := ""
+	if opts.Password != "" {
+		authType = "password"
+	} else if opts.PIN != "" {
+		authType = "pin"
+		if opts.PIN == "true" || opts.PIN == "auto" || opts.PIN == "1" {
+			genPIN, err := GenerateRandomPIN()
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate random PIN: %w", err)
+			}
+			activePIN = genPIN
+		} else {
+			activePIN = opts.PIN
+		}
+	}
+
+	if authType != "" {
+		baseHandler := handlerSpec
+		handlerSpec = api.HandlerSpec{
+			Type: "http_auth",
+			Config: map[string]any{
+				"auth_type":  authType,
+				"password":   opts.Password,
+				"pin":        activePIN,
+				"route_name": routeName,
+			},
+			Next: &baseHandler,
+		}
+	}
+
 	routeSpec := api.RouteSpec{
 		Name:     routeName,
 		Protocol: "http",
@@ -189,13 +220,18 @@ func HTTPS(ctx context.Context, client GatewayClient, opts HTTPSOptions) ([]stri
 
 	fmt.Printf("[SUCCESS] Serving HTTPS %s -> %s\n", displayTarget, target)
 	fmt.Printf("  ├── Listener:   %s\n", lAddr)
+	fmt.Printf("  ├── Mount:      %s\n", routeName)
+	if activePIN != "" {
+		formattedPIN := activePIN
+		if len(activePIN) == 6 {
+			formattedPIN = activePIN[:3] + " " + activePIN[3:]
+		}
+		fmt.Printf("  ├── Access PIN: 🔑 %s (Share PIN with recipients)\n", formattedPIN)
+	} else if opts.Password != "" {
+		fmt.Printf("  ├── Protection: 🔒 Password Protected\n")
+	}
 	if opts.TTL > 0 {
-		fmt.Printf("  ├── Mount:      %s\n", routeName)
 		fmt.Printf("  ├── TTL:        %v (auto-expires)\n", opts.TTL)
-	} else if domainVal != "" {
-		fmt.Printf("  ├── Mount:      %s\n", routeName)
-	} else {
-		fmt.Printf("  └── Mount:      %s\n", routeName)
 	}
 	if domainVal != "" {
 		fmt.Printf("  └── Public URL: https://%s%s\n", domainVal, path)

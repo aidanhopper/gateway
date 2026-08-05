@@ -829,3 +829,76 @@ func TestServeOffURLStyleMountNames(t *testing.T) {
 	}
 }
 
+func TestHTTPSAuthOptions(t *testing.T) {
+	ts, client := setupServeMockServer(t)
+	defer ts.Close()
+	ctx := context.Background()
+
+	// Test Password Auth option
+	routes, err := HTTPS(ctx, client, HTTPSOptions{
+		Mount:    "app.example.com",
+		Target:   "3000",
+		Password: "SuperSecretPassword",
+		Yes:      true,
+	})
+	if err != nil {
+		t.Fatalf("HTTPS failed with password auth: %v", err)
+	}
+	if len(routes) == 0 {
+		t.Fatal("expected created route name")
+	}
+
+	routeList, err := client.ListRoutes(ctx)
+	if err != nil {
+		t.Fatalf("ListRoutes failed: %v", err)
+	}
+
+	foundAuthRoute := false
+	for _, r := range routeList {
+		if r.Name == routes[0] {
+			foundAuthRoute = true
+			if r.Handler.Type != "http_auth" {
+				t.Errorf("expected outer handler type 'http_auth', got %q", r.Handler.Type)
+			}
+			if r.Handler.Config["auth_type"] != "password" {
+				t.Errorf("expected auth_type 'password', got %v", r.Handler.Config["auth_type"])
+			}
+		}
+	}
+	if !foundAuthRoute {
+		t.Errorf("created auth route not found in ListRoutes")
+	}
+
+	// Test Random PIN Auth option
+	pinRoutes, err := HTTPS(ctx, client, HTTPSOptions{
+		Mount:  "pin.example.com",
+		Target: "4000",
+		PIN:    "true",
+		Yes:    true,
+	})
+	if err != nil {
+		t.Fatalf("HTTPS failed with PIN auth: %v", err)
+	}
+	if len(pinRoutes) == 0 {
+		t.Fatal("expected created PIN route name")
+	}
+
+	routeList, _ = client.ListRoutes(ctx)
+	foundPINRoute := false
+	for _, r := range routeList {
+		if r.Name == pinRoutes[0] {
+			foundPINRoute = true
+			if r.Handler.Type != "http_auth" {
+				t.Errorf("expected outer handler type 'http_auth', got %q", r.Handler.Type)
+			}
+			pinVal, ok := r.Handler.Config["pin"].(string)
+			if !ok || len(pinVal) != 6 {
+				t.Errorf("expected 6-digit random PIN, got %v", r.Handler.Config["pin"])
+			}
+		}
+	}
+	if !foundPINRoute {
+		t.Errorf("created PIN route not found in ListRoutes")
+	}
+}
+

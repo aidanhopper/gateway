@@ -43,3 +43,32 @@ func TestColorFormatting(t *testing.T) {
 	}
 	ResetColorMode()
 }
+
+func TestExtractPinFlag(t *testing.T) {
+	// Test standalone --pin
+	args, val, found := extractPinFlag([]string{"app.example.com", "3000", "--pin"})
+	if !found || val != "true" {
+		t.Errorf("expected found=true val='true', got found=%v val=%q", found, val)
+	}
+	if len(args) != 2 || args[0] != "app.example.com" || args[1] != "3000" {
+		t.Errorf("unexpected clean args: %v", args)
+	}
+
+	// Test --pin 849201
+	args, val, found = extractPinFlag([]string{"app.example.com", "3000", "--pin", "849201"})
+	if !found || val != "849201" {
+		t.Errorf("expected found=true val='849201', got found=%v val=%q", found, val)
+	}
+	if len(args) != 2 {
+		t.Errorf("unexpected clean args: %v", args)
+	}
+
+	// Test --pin=123456
+	args, val, found = extractPinFlag([]string{"--pin=123456", "app.example.com", "3000"})
+	if !found || val != "123456" {
+		t.Errorf("expected found=true val='123456', got found=%v val=%q", found, val)
+	}
+	if len(args) != 2 {
+		t.Errorf("unexpected clean args: %v", args)
+	}
+}
