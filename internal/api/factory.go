@@ -50,6 +50,7 @@ func init() {
 	DefaultHandlerRegistry.Register("http_headers", HTTPHeadersFactory{})
 	DefaultHandlerRegistry.Register("http_redirect", HTTPRedirectFactory{})
 	DefaultHandlerRegistry.Register("http_basic_auth", HTTPBasicAuthFactory{})
+	DefaultHandlerRegistry.Register("http_auth", HTTPAuthFactory{})
 	DefaultHandlerRegistry.Register("http_rate_limit", HTTPRateLimitFactory{})
 	DefaultHandlerRegistry.Register("http_ip_allow", HTTPIPAccessFactory{Mode: "allow"})
 	DefaultHandlerRegistry.Register("http_ip_deny", HTTPIPAccessFactory{Mode: "deny"})
@@ -335,6 +336,42 @@ func (f HTTPBasicAuthFactory) Build(spec HandlerSpec, buildNext BuildNextFunc) (
 	}
 	nextH, _ := nextObj.(http.Handler)
 	return &handlers.HTTPBasicAuth{Username: u, Password: p, Next: nextH}, nil
+}
+
+type HTTPAuthFactory struct{}
+func (f HTTPAuthFactory) Protocol() string { return "http" }
+func (f HTTPAuthFactory) Validate(spec HandlerSpec) error {
+	if spec.Next == nil {
+		return fmt.Errorf("http_auth middleware requires an inner 'next' handler")
+	}
+	return nil
+}
+func (f HTTPAuthFactory) Build(spec HandlerSpec, buildNext BuildNextFunc) (any, error) {
+	authType, _ := spec.Config["auth_type"].(string)
+	password, _ := spec.Config["password"].(string)
+	pin, _ := spec.Config["pin"].(string)
+	routeName, _ := spec.Config["route_name"].(string)
+	secretStr, _ := spec.Config["cookie_secret"].(string)
+
+	secretKey := []byte(secretStr)
+	if len(secretKey) == 0 {
+		secretKey = []byte("gateway-default-cookie-secret-key-32b")
+	}
+
+	nextObj, err := buildNext(*spec.Next)
+	if err != nil {
+		return nil, err
+	}
+	nextH, _ := nextObj.(http.Handler)
+
+	return &handlers.HTTPAuth{
+		AuthType:     authType,
+		Password:     password,
+		PIN:          pin,
+		RouteName:    routeName,
+		CookieSecret: secretKey,
+		Next:         nextH,
+	}, nil
 }
 
 type HTTPRateLimitFactory struct{}

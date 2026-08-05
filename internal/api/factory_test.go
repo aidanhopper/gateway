@@ -135,3 +135,41 @@ func TestNestedHandlerComposition(t *testing.T) {
 		t.Errorf("got header %q, want 'gateway-test'", rec.Header().Get("X-Decorated-By"))
 	}
 }
+
+func TestHTTPAuthFactoryBuild(t *testing.T) {
+	spec := HandlerSpec{
+		Type: "http_auth",
+		Config: map[string]any{
+			"auth_type":     "password",
+			"password":      "secret123",
+			"route_name":    "test-auth-route",
+			"cookie_secret": "my-32byte-secret-key-123456789012",
+		},
+		Next: &HandlerSpec{
+			Type: "http_redirect",
+			Config: map[string]any{
+				"status": 302,
+				"url":    "https://example.com/target",
+			},
+		},
+	}
+
+	obj, err := DefaultHandlerRegistry.Build("http", spec)
+	if err != nil {
+		t.Fatalf("DefaultHandlerRegistry.Build failed for http_auth: %v", err)
+	}
+
+	handler, ok := obj.(http.Handler)
+	if !ok {
+		t.Fatalf("expected http.Handler, got %T", obj)
+	}
+
+	// Unauthenticated request should redirect to /_gateway/auth/login
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/protected", nil)
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != 302 {
+		t.Errorf("expected 302 redirect to login, got status %d", rec.Code)
+	}
+}
